@@ -3,6 +3,8 @@
 This project implements a **Retriever-Augmented Generation (RAG)** pipeline that enhances language model responses by grounding them in relevant external documents. It combines a **retriever** (for context) and a **generator** (for response) to answer queries with high accuracy and traceability.
 
 ---
+![Project Status](https://img.shields.io/badge/status-in--progress-yellow)
+
 ## 🚧 Development Notice
 
 This project is currently under active development.  
