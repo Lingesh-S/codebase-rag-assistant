@@ -1,4 +1,4 @@
-# rag_pipeline/rag_pipeline.py
+# rag_pipeline/main.py
 
 from utils.chunker import CodebaseChunker
 from embeddings.embedder import get_embedder
@@ -10,7 +10,6 @@ class RAGPipeline:
     def __init__(self, codebase_dir):
         print("🔍 Initializing RAG pipeline...")
         self.chunker = CodebaseChunker(codebase_dir)
-        self.vectorstore.store(self.docs, self.embedder)
         self.retriever = load_retriever(persist_directory="chroma_db", embedding_function=self.embedder)
         self.generator = FlanT5Generator()
         self.docs = []
@@ -29,7 +28,7 @@ class RAGPipeline:
         self.embeddings = self.embedder.embed(self.docs)
 
         print("📦 Storing embeddings in vector DB...")
-        self.vectorstore.store(self.embeddings, self.docs)
+        self.vectorstore.create_from_documents(self.docs)
         print("✅ Knowledge base built successfully!")
 
 
