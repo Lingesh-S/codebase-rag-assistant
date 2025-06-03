@@ -35,9 +35,6 @@ This project is currently under active development.
 
 ---
 
-## 🗂️ Folder Structure
-
-```bash
 
 ## 📂 Project Structure
 
