@@ -12,6 +12,6 @@ def load_codebase(directory_path):
     # Optionally, load .json files using JSONLoader
     json_loader = DirectoryLoader(path=directory_path, glob="**/*.json", loader_cls=JSONLoader)
 
-    # Load all documents
+    # Load all the documents
     documents = py_loader.load() + md_loader.load() + json_loader.load()
     return documents
