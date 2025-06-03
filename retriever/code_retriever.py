@@ -2,7 +2,7 @@
 
 from langchain_chroma import Chroma
 
-# 💡 Accept embedding_function from outside
+#  Accept embedding_function from outside
 def load_retriever(persist_directory="chroma_db", embedding_function=None):
     if embedding_function is None:
         raise ValueError("❌ 'embedding_function' is required!")

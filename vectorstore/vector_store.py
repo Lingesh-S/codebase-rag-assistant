@@ -21,7 +21,7 @@ class VectorStore:
             self.load()
         return self.db.similarity_search(query, k=k)
 
-    # ✅ Add this method to match usage in main pipeline
+    #  Add this method to match usage in main pipeline
     def store(self, docs, embedder=None):
         if embedder:
             self.embedding = embedder  # override default

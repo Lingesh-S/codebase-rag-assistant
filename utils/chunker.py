@@ -15,7 +15,7 @@ class CodebaseChunker:
 
     def load_and_chunk(self):
         # ⛏️ You still need to implement logic to load .py/.md/.json files here
-        # Example stub logic:
+        # Example stub logic
         from langchain.docstore.document import Document
         import os
 

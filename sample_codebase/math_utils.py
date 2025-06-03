@@ -1,4 +1,4 @@
-# sample_codebase/math_utils.py
+#  sample_codebase/math_utils.py
 
 """
 This module contains basic math utility functions.
