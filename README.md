@@ -1,6 +1,8 @@
-# 🧠 RAG Pipeline for LLMs
+# 🧠 Codebase RAG Assistant — AI-Powered Code Explainer
+An advanced Retriever-Augmented Generation (RAG) pipeline designed to ingest, index, and query software codebases using large language models.
+Explore your own project files with natural language queries — understand, debug, and document your code effortlessly.
 
-This project implements a **Retriever-Augmented Generation (RAG)** pipeline that enhances language model responses by grounding them in relevant external documents. It combines a **retriever** (for context) and a **generator** (for response) to answer queries with high accuracy and traceability.
+
 
 ---
 ## 🚧 Development Notice
@@ -13,55 +15,72 @@ This project is currently under active development.
 
 ## 🎯 Objective
 
-To build a modular, production-ready RAG system that:
-- Retrieves context from a custom document corpus
-- Generates accurate, context-aware answers using an LLM
-- Is extensible for academic, enterprise, and research use cases
+- Loads and chunks various code files (`.py`, `.md`, `.json`, etc.)
+- Creates semantic vector embeddings for efficient search
+- Retrieves relevant code snippets in response to natural language queries
+- Uses LLMs to generate detailed, context-aware explanations
+- Provides a developer-friendly UI for interactive Q&A on your codebase
 
 ---
 
-## 🛠️ Tech Stack (Planned)
 
-- **LangChain** – LLM workflow orchestration  
-- **OpenAI / Hugging Face Transformers** – LLMs  
-- **ChromaDB / FAISS** – Vector-based document retrieval  
-- **PyPDF / Text Loader** – Document processing  
-- **Streamlit / FastAPI** *(optional)* – UI or API deployment
+##🔧 Tech Stack
+- LangChain — Orchestrating retriever and generator workflows
+- SentenceTransformers — Embedding models for semantic search
+- ChromaDB — Efficient vector similarity search and indexing
+- Streamlit — Web UI for interactive code queries
+- Python — Core programming language
+
+
 
 ---
 
 ## 🗂️ Folder Structure
 
 ```bash
-rag-pipeline-llms/
-├── retriever/          # Document loading, embedding, vector DB setup
-├── generator/          # LLM prompts, templates, chains
-├── pipeline/           # Main orchestration logic (retriever + generator)
-├── examples/           # Sample queries, testing use cases
-├── data/               # Knowledge base docs (PDFs, text)
+
+## 📂 Project Structure
+
+```bash
+CODEBASE-RAG-ASSISTANT/
+├── .venv/               # Python virtual environment folder
+├── app/                 # Streamlit or application UI code
+├── chroma_db/           # Chroma vector DB persistence files
+├── data/                # Project data, documents, or knowledge base
+├── embeddings/          # Embedding generation scripts and models
+├── loaders/             # Code loaders for .py, .md, .json, etc.
+├── rag_pipeline/        # Orchestration of retriever + generator
+├── retriever/           # Semantic search and vector similarity logic
+├── sample_codebase/     # Example codebases for demo/testing
+├── utils/               # Utility functions and helpers
+├── vectorstore/         # Vector store management and setup
+├── venv/                # Another possible Python virtual environment folder
+├── .gitignore
+├── LICENSE
 ├── README.md
-├── requirements.txt
-└── .gitignore
+└── requirements.txt
 ```
 
 ---
 
 ## 🔍 Key Features
 
-- 📄 Custom PDF/Text ingestion  
-- 🧠 Semantic search with embeddings  
-- 🤖 LLM-based answer generation  
-- 📜 Source attribution for traceability  
-- 📈 Modular design for easy scaling
+- 📂 Multi-format code ingestion (.py, .md, .json)
+- 🧠 Semantic search over code chunks using embeddings
+- 🤖 LLM-powered natural language answers explaining code
+- 🔄 Modular components for easy customization and extension
+- 🛠️ Developer-friendly with config options for vector stores and LLMs
+
 
 ---
 
 ## 💻 Installation
 
 ```bash
-git clone https://github.com/your-username/rag-pipeline-llms.git
-cd rag-pipeline-llms
+git clone https://github.com/your-username/codebase-rag-assistant.git
+cd codebase-rag-assistant
 pip install -r requirements.txt
+
 ```
 
 ---
@@ -75,10 +94,12 @@ python pipeline/main.py
 
 ---
 
-## 📚 Examples
+## ▶️ How to Use
+1. Prepare your codebase in the data/ folder or point to your own repo
 
-- `examples/sample_query.py` – Shows how to ask a question and get an answer from the pipeline  
-- `data/` – Add your PDFs or documents here to build a knowledge base
+2. Run the loader to ingest and chunk code files into the vector store
+
+3. Start the Streamlit app for an interactive Q&A interface
 
 ---
 
