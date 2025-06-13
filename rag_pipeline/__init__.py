@@ -1,17 +1,18 @@
 # rag_pipeline/__init__.py
 
 from utils.chunker import CodebaseChunker
-from embeddings.embedder import get_embedder
+from embeddings.embedder import get_embedding_model
 from vectorstore.vector_store import VectorStore
 from retriever.code_retriever import load_retriever
 from rag_pipeline.generator import FlanT5Generator
+
 
 class RAGPipeline:
     def __init__(self, codebase_dir):
         print("🔍 Initializing RAG pipeline...")
 
         self.chunker = CodebaseChunker(codebase_dir)
-        self.embedder = get_embedder()
+        self.embedder = get_embedding_model()
         self.vectorstore = VectorStore(persist_dir="chroma_db")
         self.docs = []
 
@@ -41,13 +42,22 @@ class RAGPipeline:
 
     def answer_question(self, query):
         print(f"❓ User query: {query}")
-        relevant_docs = self.retriever.retrieve(query, top_k=3)
+
+        # ✅ Retrieve relevant docs
+        relevant_docs = self.retriever.invoke(query)
 
         print("🔗 Retrieved relevant documents:")
         for doc in relevant_docs:
-            print("-", doc)
+            print("-", doc.page_content)
 
-        context = " ".join(relevant_docs)
-        answer = self.generator.generate_answer(query, context)
+        # ✅ Build context
+        context = " ".join([doc.page_content for doc in relevant_docs])
+
+        # 🔍 Debug: print context before passing to the model
+        print("🧾 Context being sent to the model:")
+        print(context)
+
+        # 🧠 Generate answer
+        answer = self.generator.generate(question=query, context=context)
         print("🧠 Answer:", answer)
         return answer

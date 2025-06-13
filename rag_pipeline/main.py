@@ -1,12 +1,19 @@
 # rag_pipeline/main.py
 
-from rag_pipeline import RAGPipeline  # ✅ Import the class from __init__.py
+from rag_pipeline import RAGPipeline
 
 if __name__ == "__main__":
-    # Set your codebase path
-    codebase_path = "./sample_codebase"  # Update to your actual codebase folder
-    query = "What does the main function do?"
+    codebase_path = "./sample_codebase"  # 🛠️ Change to your actual folder name
 
+    print("🔍 Initializing RAG pipeline...")
     rag = RAGPipeline(codebase_path)
     rag.build_knowledge_base()
-    rag.answer_question(query)
+
+    print("\n💬 Ask questions about your codebase! Type 'exit' to quit.\n")
+
+    while True:
+        user_input = input("❓ Ask a question about your codebase: ")
+        if user_input.lower() in ["exit", "quit"]:
+            print("👋 Exiting assistant. See you soon!")
+            break
+        rag.answer_question(user_input)

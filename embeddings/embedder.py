@@ -1,4 +1,4 @@
-# embedder.py
+# embeddings/embedder.py
 
 import os
 from langchain_huggingface import HuggingFaceEmbeddings

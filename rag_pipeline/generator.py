@@ -1,9 +1,14 @@
+#rag_pipeline/generator.py
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 import torch
+from transformers.utils import logging
 
 class FlanT5Generator:
     def __init__(self, model_name='google/flan-t5-base'):
         print(f"Loading model: {model_name}")
+          # 🪄 Enable debug logs for better tracing
+        logging.set_verbosity_debug()
+
         self.tokenizer = T5Tokenizer.from_pretrained(model_name)
         self.model = T5ForConditionalGeneration.from_pretrained(model_name)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
