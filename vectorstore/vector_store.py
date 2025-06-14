@@ -1,4 +1,5 @@
 # vectorstore/vector_store.py
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -6,7 +7,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import os
 
 def split_documents(documents: list[Document], chunk_size=500, chunk_overlap=50):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=50)
     return splitter.split_documents(documents)
 
 def db_exists(persist_directory: str) -> bool:
@@ -29,8 +30,8 @@ def create_or_load_vectorstore(
 def similarity_search(vectorstore: Chroma, query: str, k: int = 5):
     return vectorstore.similarity_search(query, k=k)
 
-# ✅ Restored VectorStore class to support class-based usage in rag_pipeline
 
+# ✅ VectorStore class with document inspection
 class VectorStore:
     def __init__(self, persist_dir="vectorstore", embedding=None):
         self.persist_dir = persist_dir
@@ -52,3 +53,8 @@ class VectorStore:
 
     def db_exists(self):
         return os.path.exists(self.persist_dir) and len(os.listdir(self.persist_dir)) > 0
+
+    def get_all_documents(self):
+        if not self.db:
+            self.load()
+        return self.db.get()["documents"]

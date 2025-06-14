@@ -15,3 +15,4 @@ def load_codebase(directory_path):
     # Load all the documents
     documents = py_loader.load() + md_loader.load() + json_loader.load()
     return documents
+
