@@ -3,7 +3,6 @@ An advanced Retriever-Augmented Generation (RAG) pipeline designed to ingest, in
 Explore your own project files with natural language queries — understand, debug, and document your code effortlessly.
 
 
-
 ---
 ## 🚧 Development Notice
 ![Project Status](https://img.shields.io/badge/status-in--progress-yellow)
