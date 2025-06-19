@@ -1,52 +1,74 @@
-# streamlit/app.py
-
-import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+import shutil
+import tempfile
 import streamlit as st
-from rag_pipeline import RAGPipeline
+from langchain_community.document_loaders import DirectoryLoader, PythonLoader, TextLoader, JSONLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.llms import HuggingFaceHub
+from langchain.chains import RetrievalQA
 
-# Set page config
-st.set_page_config(page_title="Codebase RAG Assistant", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Codebase RAG Assistant", layout="wide")
+st.markdown("## 🧠 Codebase RAG Assistant")
+st.markdown("Ask questions about your codebase. Powered by embeddings + retrieval.")
 
-st.title("🧠 Codebase RAG Assistant")
-st.caption("Ask questions about your codebase. Powered by embeddings + retrieval.")
-
-# --- Sidebar ---
+# Sidebar for input method
 st.sidebar.header("📂 Codebase Configuration")
+upload_option = st.sidebar.radio("Choose input method:", ("📁 Folder Path", "📤 Upload Files"))
 
-# Folder input
-code_folder = st.sidebar.text_input("Enter path to your codebase folder:", "sample_codebase")
+# File upload logic
+uploaded_files = []
+folder_path = None
 
-# Build button
+if upload_option == "📁 Folder Path":
+    folder_path = st.sidebar.text_input("Enter path to your codebase folder:", value="sample_codebase")
+else:
+    uploaded_files = st.sidebar.file_uploader("Upload your codebase files", type=["py", "md", "json"], accept_multiple_files=True)
+
+# Button to build knowledge base
 if st.sidebar.button("📦 Build Knowledge Base"):
-    if os.path.exists(code_folder):
-        st.session_state.pipeline = RAGPipeline(code_folder)
-        with st.spinner("Building vector database..."):
-            st.session_state.pipeline.build_knowledge_base()
+    st.session_state.docs = []
+    st.session_state.vectordb = None
+
+    if upload_option == "📤 Upload Files" and uploaded_files:
+        temp_dir = tempfile.mkdtemp()
+        for file in uploaded_files:
+            file_path = os.path.join(temp_dir, file.name)
+            with open(file_path, "wb") as f:
+                f.write(file.getbuffer())
+        folder_path = temp_dir
+
+    if folder_path and os.path.exists(folder_path):
+        loaders = [
+            DirectoryLoader(path=folder_path, glob="**/*.py", loader_cls=PythonLoader),
+            DirectoryLoader(path=folder_path, glob="**/*.md", loader_cls=TextLoader),
+            DirectoryLoader(path=folder_path, glob="**/*.json", loader_cls=JSONLoader),
+        ]
+        docs = []
+        for loader in loaders:
+            docs.extend(loader.load())
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        texts = splitter.split_documents(docs)
+
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vectordb = Chroma.from_documents(texts, embeddings, persist_directory="./chroma_db")
+        vectordb.persist()
+
+        st.session_state.vectordb = vectordb
         st.success("✅ Knowledge base built successfully!")
     else:
-        st.error("❌ Folder path not found. Please check again.")
+        st.warning("❗ Please upload files or enter a valid folder path.")
 
-# --- Main UI ---
-st.markdown("### ❓ Ask a question about your codebase")
-
-question = st.text_input("Your question:")
-
-if st.button("🔍 Search"):
-    if "pipeline" not in st.session_state:
-        st.warning("⚠️ Please build the knowledge base first.")
-    elif question.strip() == "":
-        st.warning("⚠️ Question cannot be empty.")
+# Ask a question
+query = st.text_input("❓ Ask a question about your codebase", placeholder="Your question...")
+if st.button("🔍 Search") and query:
+    if "vectordb" in st.session_state and st.session_state.vectordb:
+        llm = HuggingFaceHub(repo_id="google/flan-t5-base", model_kwargs={"temperature": 0.2, "max_length": 200})
+        qa = RetrievalQA.from_chain_type(llm=llm, retriever=st.session_state.vectordb.as_retriever())
+        response = qa.run(query)
+        st.markdown("### 🧾 Answer")
+        st.success(response)
     else:
-        with st.spinner("Searching relevant code chunks..."):
-            results = st.session_state.pipeline.answer_question(question)
-
-            if results:
-                st.markdown("### 📄 Top Relevant Snippets")
-                for idx, doc in enumerate(results, 1):
-                    st.markdown(f"**[{idx}] {doc.metadata.get('source', 'Unknown File')}**")
-                    st.code(doc.page_content[:1000], language='python')
-            else:
-                st.info("🤔 No relevant code found.")
+        st.warning("⚠️ Please build the knowledge base first.")
