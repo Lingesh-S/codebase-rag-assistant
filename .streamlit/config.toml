@@ -1,2 +1,4 @@
+# .streamlit/config.toml
+
 [python]
 version = "3.10"
