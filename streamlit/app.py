@@ -2,14 +2,16 @@ import os
 import shutil
 import tempfile
 import streamlit as st
+from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, PythonLoader, TextLoader, JSONLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.llms import HuggingFaceHub
 from langchain.chains import RetrievalQA
-from dotenv import load_dotenv
+
 load_dotenv()
+
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
@@ -22,9 +24,24 @@ st.markdown("""
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("📂 Codebase Input")
-    upload_method = st.radio("Choose input type:", ["📁 Folder Path", "📤 Upload Files"])
+    st.header("⚙️ Configuration")
 
+    # 🌙 Dark Mode Toggle (for future theming use)
+    st.toggle("🌙 Dark mode")
+
+    # 🧠 Model Config
+    model_name = st.selectbox("Choose LLM model", options=[
+        "google/flan-t5-xl",
+        "tiiuae/falcon-7b-instruct",
+        "bigscience/bloom"
+    ], index=0)
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.2)
+    max_tokens = st.slider("Max tokens", 50, 512, 200)
+
+    st.markdown("---")
+    st.header("📂 Codebase Input")
+
+    upload_method = st.radio("Choose input type:", ["📁 Folder Path", "📤 Upload Files"])
     uploaded_files = []
     folder_path = None
 
@@ -33,6 +50,12 @@ with st.sidebar:
     else:
         uploaded_files = st.file_uploader("Upload .py / .md / .json files", type=["py", "md", "json"], accept_multiple_files=True)
 
+    # 🔄 Reset Chat
+    if st.button("🧹 Clear Chat"):
+        st.session_state.messages = []
+        st.experimental_rerun()
+
+    # 📦 Build Knowledge Base
     if st.button("📦 Build Knowledge Base"):
         st.session_state.docs = []
         st.session_state.vectordb = None
@@ -65,6 +88,12 @@ with st.sidebar:
                 st.session_state.vectordb = vectordb
 
             st.success("✅ Knowledge base built successfully!")
+
+            # 📄 Show uploaded files
+            if uploaded_files:
+                st.markdown("### 📄 Uploaded Files")
+                for file in uploaded_files:
+                    st.write(file.name)
         else:
             st.warning("⚠️ Invalid folder or no files uploaded.")
 
@@ -90,9 +119,9 @@ if query:
             with st.spinner("🤖 Thinking..."):
                 llm = HuggingFaceHub(
                     repo_id="google/flan-t5-xl",
-                    model_kwargs={"temperature": 0.2, "max_length": 200},
+                    model_kwargs={"temperature": temperature, "max_new_tokens": max_tokens},
                     huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
-                )   
+                )
                 qa = RetrievalQA.from_chain_type(llm=llm, retriever=st.session_state.vectordb.as_retriever())
                 response = qa.run(query)
                 st.markdown(response)
