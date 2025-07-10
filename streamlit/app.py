@@ -17,11 +17,62 @@ load_dotenv()
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
 # --- Header ---
+# --- Custom CSS Styling ---
 st.markdown("""
-    <h1 style='text-align: center; color: #4ADEDE;'>🤖 Codebase RAG Assistant</h1>
-    <p style='text-align: center;'>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
-    <hr style='margin-top:20px;margin-bottom:10px;'>
+    <style>
+        /* GitHub button fixed to top right */
+        .github-float {
+            position: fixed;
+            top: 20px;
+            right: 25px;
+            z-index: 999;
+        }
+
+        .github-btn {
+            background-color: #00f9ff;
+            color: black;
+            font-weight: bold;
+            padding: 6px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            box-shadow: 0 0 10px rgba(0, 249, 255, 0.7);
+        }
+
+        .github-btn:hover {
+            background-color: #00c2cc;
+            color: white;
+        }
+
+        /* Heading box */
+        .header-box {
+            background-color: #222;
+            border: 2px solid #00f9ff;
+            border-radius: 15px;
+            padding: 30px 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 0 18px rgba(0, 249, 255, 0.4);
+            text-align: center;
+        }
+
+        /* Toggle style */
+        .stToggleSwitch span {
+            color: #fff !important;
+        }
+    </style>
+
+    <!-- GitHub Button -->
+    <div class='github-float'>
+        <a class='github-btn' href='https://github.com/Lingesh-S/codebase-rag-assistant' target='_blank'>⭐ GitHub</a>
+    </div>
+
+    <!-- Page Title Box -->
+    <div class='header-box'>
+        <h1 style='color: #00f9ff;'>🤖 Codebase RAG Assistant</h1>
+        <p style='color: #ccc;'>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
+    </div>
 """, unsafe_allow_html=True)
+
+
 
 # --- Sidebar ---
 with st.sidebar:
