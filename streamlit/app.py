@@ -17,63 +17,70 @@ load_dotenv()
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
 # --- Header ---
-# --- Header with GitHub Floating Button and Neon Style ---
+# --- Header with Clean Dark Theme + GitHub Button ---
 st.markdown("""
     <style>
         .header-box {
-            background-color: #1e1e2f;
-            border: 2px solid #9147ff;
-            border-radius: 18px;
-            padding: 30px;
-            margin-top: 20px;
-            margin-bottom: 40px;
-            box-shadow: 0 0 25px rgba(145, 71, 255, 0.5);
+            background-color: #1e1f24;
+            border: 1.5px solid #3cc2ff;
+            border-radius: 16px;
+            padding: 25px 20px;
+            margin-top: 25px;
+            margin-bottom: 35px;
             text-align: center;
         }
 
         .header-box h1 {
-            color: #27e1f9;
-            font-size: 2.5em;
+            color: #3cc2ff;
+            font-size: 2.4em;
+            font-weight: 700;
+            margin-bottom: 10px;
         }
 
         .header-box p {
-            color: #cccccc;
-            font-size: 1.1em;
+            color: #b0b3b8;
+            font-size: 1.05em;
+            margin: 0;
         }
 
+        /* GitHub floating button */
         .github-float {
             position: fixed;
             top: 18px;
             right: 25px;
-            z-index: 1000;
+            z-index: 999;
         }
 
         .github-btn {
-            background-color: #9147ff;
-            color: white;
-            padding: 6px 16px;
+            background-color: #3cc2ff;
+            color: #0b0b0b;
+            font-weight: 600;
+            padding: 7px 16px;
             border-radius: 8px;
             text-decoration: none;
-            font-weight: bold;
-            box-shadow: 0 0 10px rgba(145, 71, 255, 0.7);
-            transition: 0.2s;
+            font-size: 14px;
+            border: none;
         }
 
         .github-btn:hover {
-            background-color: #6f2fcf;
-            color: #fff;
+            background-color: #289ecf;
+            color: white;
         }
     </style>
 
+    <!-- GitHub button top right -->
     <div class='github-float'>
         <a class='github-btn' href='https://github.com/Lingesh-S/codebase-rag-assistant' target='_blank'>⭐ GitHub</a>
     </div>
 
+    <!-- Header box with dark theme -->
     <div class='header-box'>
         <h1>🤖 Codebase RAG Assistant</h1>
         <p>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
     </div>
 """, unsafe_allow_html=True)
+
+
 
 
 
