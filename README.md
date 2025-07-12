@@ -4,13 +4,6 @@ Explore your own project files with natural language queries — understand, deb
 
 
 ---
-## 🚧 Development Notice
-![Project Status](https://img.shields.io/badge/status-in--progress-yellow)
-
-This project is currently under active development.  
-📅 Expected updates coming soon!
-
----
 
 ## 🎯 Objective
 
