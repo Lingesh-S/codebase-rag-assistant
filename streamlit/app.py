@@ -20,7 +20,7 @@ st.markdown("""
     <style>
         .github-btn-fixed {
             position: absolute;
-            top: 20px;
+            top: -20px;
             right: 30px;
             z-index: 1000;
         }
