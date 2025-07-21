@@ -1,4 +1,3 @@
-#streamlit/app.py
 import os
 import shutil
 import tempfile
@@ -16,7 +15,6 @@ load_dotenv()
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
-# --- Header ---
 # --- Header with Clean Dark Theme + GitHub Button ---
 st.markdown("""
     <style>
@@ -48,7 +46,7 @@ st.markdown("""
             position: fixed;
             top: 18px;
             right: 25px;
-            z-index: 999;
+            z-index: 9999;
         }
 
         .github-btn {
@@ -80,19 +78,11 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-
-
-
-
-
 # --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ Configuration")
-
-    # 🌙 Dark Mode Toggle (for future theming use)
     st.toggle("🌙 Dark mode")
 
-    # 🧠 Model Config
     model_name = st.selectbox("Choose LLM model", options=[
         "google/flan-t5-xl",
         "tiiuae/falcon-7b-instruct",
@@ -113,12 +103,10 @@ with st.sidebar:
     else:
         uploaded_files = st.file_uploader("Upload .py / .md / .json files", type=["py", "md", "json"], accept_multiple_files=True)
 
-    # 🔄 Reset Chat
     if st.button("🧹 Clear Chat"):
         st.session_state.messages = []
         st.experimental_rerun()
 
-    # 📦 Build Knowledge Base
     if st.button("📦 Build Knowledge Base"):
         st.session_state.docs = []
         st.session_state.vectordb = None
@@ -152,7 +140,6 @@ with st.sidebar:
 
             st.success("✅ Knowledge base built successfully!")
 
-            # 📄 Show uploaded files
             if uploaded_files:
                 st.markdown("### 📄 Uploaded Files")
                 for file in uploaded_files:
