@@ -15,61 +15,68 @@ load_dotenv()
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
-# --- Header with Embedded GitHub Button ---
+# --- Header + GitHub Button ---
 st.markdown("""
     <style>
-        .header-container {
-            background-color: #1e1f24;
-            border: 1.5px solid #3cc2ff;
-            border-radius: 16px;
-            padding: 25px 20px;
-            margin-top: 25px;
-            margin-bottom: 35px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .github-btn-fixed {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            z-index: 1000;
         }
 
-        .header-title {
-            color: #3cc2ff;
-            font-size: 2.4em;
-            font-weight: 700;
-            margin: 0;
-        }
-
-        .header-subtitle {
-            color: #b0b3b8;
-            font-size: 1.05em;
-            margin-top: 8px;
-        }
-
-        .github-btn {
+        .github-btn-fixed a {
             background-color: #3cc2ff;
             color: #0b0b0b;
             font-weight: 600;
-            padding: 7px 16px;
+            padding: 8px 18px;
             border-radius: 8px;
             text-decoration: none;
             font-size: 14px;
             border: none;
         }
 
-        .github-btn:hover {
+        .github-btn-fixed a:hover {
             background-color: #289ecf;
             color: white;
         }
+
+        .header-centered {
+            background-color: #1e1f24;
+            border: 1.5px solid #3cc2ff;
+            border-radius: 16px;
+            padding: 25px 20px;
+            margin-top: 25px;
+            margin-bottom: 35px;
+            text-align: center;
+        }
+
+        .header-centered h1 {
+            color: #3cc2ff;
+            font-size: 2.4em;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header-centered p {
+            color: #b0b3b8;
+            font-size: 1.05em;
+            margin: 0;
+        }
     </style>
 
-    <div class="header-container">
-        <div>
-            <h1 class="header-title">🤖 Codebase RAG Assistant</h1>
-            <p class="header-subtitle">Ask questions about your codebase using AI-powered document retrieval & understanding</p>
-        </div>
-        <div>
-            <a class="github-btn" href="https://github.com/Lingesh-S/codebase-rag-assistant" target="_blank">⭐ GitHub</a>
-        </div>
+    <!-- GitHub floating button -->
+    <div class="github-btn-fixed">
+        <a href="https://github.com/Lingesh-S/codebase-rag-assistant" target="_blank">⭐ GitHub</a>
+    </div>
+
+    <!-- Centered header -->
+    <div class="header-centered">
+        <h1>🤖 Codebase RAG Assistant</h1>
+        <p>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
     </div>
 """, unsafe_allow_html=True)
+
 
 # --- Sidebar ---
 with st.sidebar:
