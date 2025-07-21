@@ -15,38 +15,32 @@ load_dotenv()
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
-# --- Header with Clean Dark Theme + GitHub Button ---
+# --- Header with Embedded GitHub Button ---
 st.markdown("""
     <style>
-        .header-box {
+        .header-container {
             background-color: #1e1f24;
             border: 1.5px solid #3cc2ff;
             border-radius: 16px;
             padding: 25px 20px;
             margin-top: 25px;
             margin-bottom: 35px;
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        .header-box h1 {
+        .header-title {
             color: #3cc2ff;
             font-size: 2.4em;
             font-weight: 700;
-            margin-bottom: 10px;
-        }
-
-        .header-box p {
-            color: #b0b3b8;
-            font-size: 1.05em;
             margin: 0;
         }
 
-        /* GitHub floating button */
-        .github-float {
-            position: fixed;
-            top: 18px;
-            right: 25px;
-            z-index: 9999;
+        .header-subtitle {
+            color: #b0b3b8;
+            font-size: 1.05em;
+            margin-top: 8px;
         }
 
         .github-btn {
@@ -66,15 +60,14 @@ st.markdown("""
         }
     </style>
 
-    <!-- GitHub button top right -->
-    <div class='github-float'>
-        <a class='github-btn' href='https://github.com/Lingesh-S/codebase-rag-assistant' target='_blank'>⭐ GitHub</a>
-    </div>
-
-    <!-- Header box with dark theme -->
-    <div class='header-box'>
-        <h1>🤖 Codebase RAG Assistant</h1>
-        <p>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
+    <div class="header-container">
+        <div>
+            <h1 class="header-title">🤖 Codebase RAG Assistant</h1>
+            <p class="header-subtitle">Ask questions about your codebase using AI-powered document retrieval & understanding</p>
+        </div>
+        <div>
+            <a class="github-btn" href="https://github.com/Lingesh-S/codebase-rag-assistant" target="_blank">⭐ GitHub</a>
+        </div>
     </div>
 """, unsafe_allow_html=True)
 
@@ -168,7 +161,7 @@ if query:
         with st.chat_message("assistant"):
             with st.spinner("🤖 Thinking..."):
                 llm = HuggingFaceHub(
-                    repo_id="google/flan-t5-xl",
+                    repo_id=model_name,
                     model_kwargs={"temperature": temperature, "max_new_tokens": max_tokens},
                     huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
                 )
