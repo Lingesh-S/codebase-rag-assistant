@@ -1,0 +1,7 @@
+{
+  "data_file": "data/inventory.json",
+  "low_stock_threshold": 5,
+  "currency": "USD",
+  "token_ttl_minutes": 60,
+  "api_base_url": "http://localhost:8000/api"
+}
