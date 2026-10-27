@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from ollama import ResponseError
 
 from rag_pipeline import generator
 from rag_pipeline.generator import (
     AnthropicLLM,
+    OllamaLLM,
     build_messages,
     condense_question,
     format_context,
@@ -145,3 +147,82 @@ def test_anthropic_refusal_is_reported_to_the_user():
     llm.client, _ = fake_anthropic(stop_reason="refusal")
 
     assert "declined" in "".join(llm.stream("s", [{"role": "user", "content": "q"}]))
+
+
+# The exact error Ollama returned when gpt-oss:20b crashed while loading on a 6 GB laptop GPU.
+LOAD_CRASH = (
+    "llama-server process has terminated: exit status 0xc0000409: The system detected an overrun of a "
+    "stack-based buffer in this application.: CUDA error: shared object initialization failed"
+)
+
+
+class FakeOllamaClient:
+    """Mimics ollama.Client.chat(stream=True): errors surface while iterating, like the real client."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def chat(self, **kwargs):
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+
+        def parts():
+            if isinstance(outcome, Exception):
+                raise outcome
+            for item in outcome:
+                if isinstance(item, Exception):
+                    raise item
+                yield SimpleNamespace(message=SimpleNamespace(content=item))
+
+        return parts()
+
+
+def make_ollama(outcomes):
+    llm = OllamaLLM(model="gpt-oss:20b", host="http://127.0.0.1:9")
+    llm.client = FakeOllamaClient(outcomes)
+    return llm
+
+
+def ask(llm):
+    return "".join(llm.stream("system", [{"role": "user", "content": "explain writer.py module"}]))
+
+
+def test_ollama_retries_once_when_the_model_crashes_while_loading():
+    llm = make_ollama([ResponseError(LOAD_CRASH, 500), ["The writer", " agent"]])
+
+    assert ask(llm) == "The writer agent"
+    assert llm.client.calls == 2
+
+
+def test_ollama_explains_what_to_do_when_the_model_keeps_crashing():
+    llm = make_ollama([ResponseError(LOAD_CRASH, 500), ResponseError(LOAD_CRASH, 500)])
+
+    with pytest.raises(RuntimeError) as error:
+        ask(llm)
+
+    message = str(error.value)
+    assert "gpt-oss:20b" in message
+    assert "memory" in message and "smaller model" in message
+    assert "stack-based buffer" not in message
+    assert llm.client.calls == 2
+
+
+def test_ollama_does_not_retry_once_the_answer_has_started():
+    llm = make_ollama([["Partial", ResponseError("connection reset", 500)]])
+    received = []
+
+    with pytest.raises(ResponseError):
+        for piece in llm.stream("system", [{"role": "user", "content": "q"}]):
+            received.append(piece)
+
+    assert received == ["Partial"]
+    assert llm.client.calls == 1
+
+
+def test_ollama_does_not_retry_client_errors():
+    llm = make_ollama([ResponseError("model 'nope' not found", 404)])
+
+    with pytest.raises(ResponseError):
+        ask(llm)
+    assert llm.client.calls == 1

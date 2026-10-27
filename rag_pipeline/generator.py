@@ -115,19 +115,48 @@ class OllamaLLM:
         self.temperature = temperature
         self.max_tokens = max_tokens
         # Ollama silently truncates prompts longer than num_ctx, so leave room for the retrieved context.
-        # Larger windows need more GPU memory; raise OLLAMA_NUM_CTX if your machine has it to spare.
+        # A larger window pushes more of the model out of the GPU into system RAM.
         self.num_ctx = num_ctx or int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 
     def stream(self, system, messages, max_tokens=None, effort=None):
-        response = self.client.chat(
-            model=self.model,
-            messages=[{"role": "system", "content": system}, *messages],
-            stream=True,
-            options={"temperature": self.temperature, "num_predict": max_tokens or self.max_tokens, "num_ctx": self.num_ctx},
+        from ollama import ResponseError
+
+        options = {"temperature": self.temperature, "num_predict": max_tokens or self.max_tokens, "num_ctx": self.num_ctx}
+        for attempt in (1, 2):
+            started = False
+            try:
+                response = self.client.chat(
+                    model=self.model,
+                    messages=[{"role": "system", "content": system}, *messages],
+                    stream=True,
+                    options=options,
+                )
+                for part in response:
+                    if part.message.content:
+                        started = True
+                        yield part.message.content
+                return
+            except ResponseError as exc:
+                # A model that barely fits in GPU + system memory can crash intermittently while
+                # loading (llama-server exits with a CUDA error). One retry usually gets through.
+                if started or exc.status_code < 500:
+                    raise
+                if attempt == 2:
+                    raise RuntimeError(self._load_failure_message()) from exc
+
+    def _load_failure_message(self) -> str:
+        size = ""
+        try:
+            match = next(m for m in self.client.list().models if m.model == self.model)
+            size = f" ({match.size / 1e9:.1f} GB)"
+        except Exception:
+            pass
+        return (
+            f"Ollama could not load {self.model}{size}: its server process crashed twice while loading the model. "
+            "This usually means the model does not fit in this machine's GPU and system memory. "
+            "Close memory-heavy apps and try again, use a smaller model that fits your GPU "
+            "(for example `ollama pull qwen2.5-coder:7b`), or switch to the Hugging Face or Anthropic provider."
         )
-        for part in response:
-            if part.message.content:
-                yield part.message.content
 
 
 # ---- Discovery -----------------------------------------------------------------------
