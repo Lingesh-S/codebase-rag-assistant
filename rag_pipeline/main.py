@@ -13,10 +13,13 @@ if __package__ in (None, ""):
 
 from dotenv import load_dotenv
 
-from rag_pipeline.generator import PROVIDERS, available_providers, get_llm
-from rag_pipeline.pipeline import RAGPipeline, RAGSettings
-from retriever.code_retriever import RETRIEVAL_MODES
-from utils.chunker import chunk_body
+# Load .env before importing project modules: they read their defaults (models, paths) at import time.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+from rag_pipeline.generator import PROVIDERS, available_providers, get_llm  # noqa: E402
+from rag_pipeline.pipeline import RAGPipeline, RAGSettings  # noqa: E402
+from retriever.code_retriever import RETRIEVAL_MODES  # noqa: E402
+from utils.chunker import chunk_body  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -45,7 +48,6 @@ def print_sources(sources, with_code=False):
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    load_dotenv()
     args = parse_args(argv)
 
     settings = RAGSettings(top_k=args.k, retrieval_mode=args.mode)

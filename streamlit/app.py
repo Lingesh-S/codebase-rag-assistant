@@ -12,13 +12,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env before importing project modules: they read their defaults (models, paths) at import time.
+load_dotenv(PROJECT_ROOT / ".env")
+
 from embeddings.embedder import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, get_embedding_model  # noqa: E402
 from loaders.code_loader import SUPPORTED_EXTENSIONS, extract_zip  # noqa: E402
 from rag_pipeline.generator import DEFAULT_MODELS, available_providers, get_llm, ollama_models  # noqa: E402
 from rag_pipeline.pipeline import RAGPipeline, RAGSettings  # noqa: E402
 from utils.chunker import chunk_body  # noqa: E402
-
-load_dotenv()
 
 PROVIDER_LABELS = {
     "huggingface": "Hugging Face Inference",
@@ -185,9 +186,13 @@ with st.sidebar:
     if provider == "ollama":
         installed = local_ollama_models()
         if installed:
-            model_name = st.selectbox("Model", installed)
+            preferred = DEFAULT_MODELS["ollama"]
+            index = installed.index(preferred) if preferred in installed else 0
+            model_name = st.selectbox("Model", installed, index=index)
+            if preferred and preferred not in installed:
+                st.caption(f"OLLAMA_MODEL={preferred} is not installed, so {installed[0]} is used.")
         else:
-            st.warning("Ollama is not running or has no models. Try `ollama pull qwen2.5-coder:7b`.")
+            st.warning("Ollama is not running or has no models. Try `ollama pull qwen3.5:4b`.")
     elif provider != "none":
         model_name = st.text_input("Model", value=DEFAULT_MODELS[provider])
 

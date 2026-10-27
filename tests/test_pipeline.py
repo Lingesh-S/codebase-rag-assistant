@@ -56,3 +56,16 @@ def test_rewrite_can_be_disabled(codebase, make_rag):
 
     assert answer.search_query == "and the cart?"
     assert len(llm.calls) == 1
+
+
+def test_importing_the_package_does_not_read_settings_before_env_is_loaded():
+    # `python -m rag_pipeline.main` imports the package first; if that pulled in the generator,
+    # model defaults would be read before main.py loads .env and OLLAMA_MODEL would be ignored.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = "import sys, rag_pipeline; print('rag_pipeline.generator' in sys.modules); from rag_pipeline import RAGPipeline; print(RAGPipeline.__name__)"
+    result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+
+    assert result.stdout.split() == ["False", "RAGPipeline"], result.stderr

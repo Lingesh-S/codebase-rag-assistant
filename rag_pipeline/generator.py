@@ -111,7 +111,7 @@ class OllamaLLM:
         self.client = ollama.Client(host=host or ollama_host())
         self.model = model or DEFAULT_MODELS["ollama"] or next(iter(ollama_models()), "")
         if not self.model:
-            raise RuntimeError("No Ollama model found. Pull one first, e.g. `ollama pull qwen2.5-coder:7b`.")
+            raise RuntimeError("No Ollama model found. Pull one first, e.g. `ollama pull qwen3.5:4b`.")
         self.temperature = temperature
         self.max_tokens = max_tokens
         # Ollama silently truncates prompts longer than num_ctx, so leave room for the retrieved context.
@@ -155,7 +155,7 @@ class OllamaLLM:
             f"Ollama could not load {self.model}{size}: its server process crashed twice while loading the model. "
             "This usually means the model does not fit in this machine's GPU and system memory. "
             "Close memory-heavy apps and try again, use a smaller model that fits your GPU "
-            "(for example `ollama pull qwen2.5-coder:7b`), or switch to the Hugging Face or Anthropic provider."
+            "(for example `ollama pull qwen3.5:4b`), or switch to the Hugging Face or Anthropic provider."
         )
 
 

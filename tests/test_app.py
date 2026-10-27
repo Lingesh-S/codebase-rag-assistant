@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parents[1] / "streamlit" / "app.py")
@@ -24,6 +25,20 @@ def test_app_renders_and_asks_for_an_index_first(no_llm):
 
     assert not at.exception
     assert "build the knowledge base" in at.chat_message[-1].markdown[0].value
+
+
+def test_ollama_model_defaults_to_the_configured_model(no_llm, monkeypatch):
+    from rag_pipeline import generator
+
+    monkeypatch.setattr(generator, "ollama_models", lambda: ["qwen2.5-coder:7b", "qwen3.5:4b", "gpt-oss:20b"])
+    monkeypatch.setitem(generator.DEFAULT_MODELS, "ollama", "qwen3.5:4b")
+    st.cache_data.clear()  # provider detection is cached between runs
+
+    at = AppTest.from_file(APP, default_timeout=60).run()
+
+    assert not at.exception
+    assert at.sidebar.selectbox[0].value == "ollama"
+    assert at.sidebar.selectbox[1].value == "qwen3.5:4b"
 
 
 def test_invalid_folder_shows_an_error(no_llm):
