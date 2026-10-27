@@ -1,16 +1,32 @@
 import os
 import shutil
+import sys
 import tempfile
+import uuid
+from pathlib import Path
+
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.document_loaders import DirectoryLoader, PythonLoader, TextLoader, JSONLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.llms import HuggingFaceHub
-from langchain.chains import RetrievalQA
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from embeddings.embedder import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, get_embedding_model  # noqa: E402
+from loaders.code_loader import SUPPORTED_EXTENSIONS, extract_zip  # noqa: E402
+from rag_pipeline.generator import DEFAULT_MODELS, available_providers, get_llm, ollama_models  # noqa: E402
+from rag_pipeline.pipeline import RAGPipeline, RAGSettings  # noqa: E402
+from utils.chunker import chunk_body  # noqa: E402
 
 load_dotenv()
+
+PROVIDER_LABELS = {
+    "huggingface": "Hugging Face Inference",
+    "anthropic": "Anthropic Claude",
+    "ollama": "Ollama (local)",
+    "none": "None (retrieval only)",
+}
+CODE_LANGUAGES = {"js": "javascript", "ts": "typescript", "shell": "bash", "text": None}
 
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
@@ -78,103 +94,220 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# --- Cached resources (shared by all sessions) ---
+@st.cache_resource(show_spinner="Loading embedding model...")
+def load_embedding_model(name: str):
+    return get_embedding_model(name)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def detect_providers() -> list[str]:
+    return available_providers()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def local_ollama_models() -> list[str]:
+    return ollama_models()
+
+
+def resolve_folder(path_text: str) -> Path:
+    path = Path(path_text.strip()).expanduser()
+    if not path.is_absolute() and not path.exists():
+        path = PROJECT_ROOT / path
+    path = path.resolve()
+    allowed_root = os.getenv("RAG_ALLOWED_ROOT")
+    if allowed_root and not path.is_relative_to(Path(allowed_root).resolve()):
+        raise ValueError(f"Only folders inside {allowed_root} can be indexed on this server.")
+    if not path.is_dir():
+        raise ValueError(f"Folder not found: {path_text}")
+    return path
+
+
+def save_uploads(files, destination: Path) -> None:
+    shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True)
+    for file in files:
+        if file.name.lower().endswith(".zip"):
+            extract_zip(file.getvalue(), destination)
+        else:
+            # Only keep the base name so a crafted file name cannot escape the folder.
+            (destination / Path(file.name).name).write_bytes(file.getvalue())
+
+
+def render_sources(sources: list[dict]) -> None:
+    if not sources:
+        return
+    with st.expander(f"📚 Sources ({len(sources)})"):
+        for src in sources:
+            symbol = f" · `{src['symbol']}`" if src["symbol"] else ""
+            st.markdown(f"**[{src['n']}]** `{src['source']}` · lines {src['start_line']}-{src['end_line']}{symbol}")
+            st.code(src["code"], language=CODE_LANGUAGES.get(src["language"], src["language"]))
+
+
+def source_dicts(chunks) -> list[dict]:
+    return [
+        {
+            "n": i,
+            "source": c.metadata["source"],
+            "start_line": c.metadata["start_line"],
+            "end_line": c.metadata["end_line"],
+            "symbol": c.metadata.get("symbol", ""),
+            "language": c.metadata.get("language", "text"),
+            "code": chunk_body(c.text, c.metadata.get("header_lines", 0)),
+        }
+        for i, c in enumerate(chunks, 1)
+    ]
+
+
+# --- Session state ---
+st.session_state.setdefault("messages", [])
+st.session_state.setdefault("rag", None)
+st.session_state.setdefault("index_info", None)
+st.session_state.setdefault("session_id", uuid.uuid4().hex[:12])
+
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ Configuration")
-    st.toggle("🌙 Dark mode")
 
-    model_name = st.selectbox("Choose LLM model", options=[
-        "google/flan-t5-xl",
-        "tiiuae/falcon-7b-instruct",
-        "bigscience/bloom"
-    ], index=0)
-    temperature = st.slider("Temperature", 0.0, 1.0, 0.2)
-    max_tokens = st.slider("Max tokens", 50, 512, 200)
+    detected = detect_providers()
+    provider_options = ["huggingface", "anthropic", "ollama", "none"]
+    default_provider = detected[0] if detected else "none"
+    provider = st.selectbox(
+        "LLM provider",
+        provider_options,
+        index=provider_options.index(default_provider),
+        format_func=lambda p: PROVIDER_LABELS[p] + (" ✓" if p in detected else ""),
+        help="✓ marks providers configured on this machine (HF_TOKEN, ANTHROPIC_API_KEY or a running Ollama).",
+    )
+
+    model_name = None
+    if provider == "ollama":
+        installed = local_ollama_models()
+        if installed:
+            model_name = st.selectbox("Model", installed)
+        else:
+            st.warning("Ollama is not running or has no models. Try `ollama pull qwen2.5-coder:7b`.")
+    elif provider != "none":
+        model_name = st.text_input("Model", value=DEFAULT_MODELS[provider])
+
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.2, disabled=provider in ("anthropic", "none"),
+                            help="Current Claude models choose their own sampling settings.")
+    max_tokens = st.slider("Max answer tokens", 256, 8192, 2048, step=256, disabled=provider in ("anthropic", "none"))
+
+    st.markdown("---")
+    st.header("🔎 Retrieval")
+    top_k = st.slider("Chunks to retrieve", 3, 12, 6)
+    use_reranker = st.toggle("Cross-encoder reranking", value=False,
+                             help=f"Re-orders the top hybrid results with {DEFAULT_RERANK_MODEL}. "
+                                  "More precise on large codebases, but adds a few seconds per question on CPU.")
+    rewrite_followups = st.toggle("Rewrite follow-up questions", value=True,
+                                  help="Uses the LLM to turn follow-ups into standalone search queries.")
 
     st.markdown("---")
     st.header("📂 Codebase Input")
 
     upload_method = st.radio("Choose input type:", ["📁 Folder Path", "📤 Upload Files"])
     uploaded_files = []
-    folder_path = None
+    folder_text = None
 
     if upload_method == "📁 Folder Path":
-        folder_path = st.text_input("Enter folder path:", value="sample_codebase")
+        folder_text = st.text_input("Enter folder path:", value="sample_codebase")
     else:
-        uploaded_files = st.file_uploader("Upload .py / .md / .json files", type=["py", "md", "json"], accept_multiple_files=True)
+        uploaded_files = st.file_uploader(
+            "Upload source files or a .zip of your project",
+            type=[ext.lstrip(".") for ext in SUPPORTED_EXTENSIONS] + ["zip"],
+            accept_multiple_files=True,
+        )
 
     if st.button("🧹 Clear Chat"):
         st.session_state.messages = []
-        st.experimental_rerun()
+        st.rerun()
 
-    if st.button("📦 Build Knowledge Base"):
-        st.session_state.docs = []
-        st.session_state.vectordb = None
+    if st.button("📦 Build / Update Knowledge Base", type="primary"):
+        try:
+            if upload_method == "📤 Upload Files":
+                if not uploaded_files:
+                    raise ValueError("Upload at least one file first.")
+                folder = Path(tempfile.gettempdir()) / f"rag-upload-{st.session_state.session_id}"
+                save_uploads(uploaded_files, folder)
+                persist_dir, collection = None, f"upload-{st.session_state.session_id}"
+            else:
+                folder = resolve_folder(folder_text or "")
+                persist_dir, collection = RAGSettings().persist_dir, None
 
-        if upload_method == "📤 Upload Files" and uploaded_files:
-            temp_dir = tempfile.mkdtemp()
-            for file in uploaded_files:
-                file_path = os.path.join(temp_dir, file.name)
-                with open(file_path, "wb") as f:
-                    f.write(file.getbuffer())
-            folder_path = temp_dir
+            settings = RAGSettings(persist_dir=persist_dir, top_k=top_k)
+            with st.spinner("🔄 Loading, chunking & embedding documents..."):
+                rag = RAGPipeline(folder, settings, collection_name=collection, embedding=load_embedding_model(DEFAULT_EMBEDDING_MODEL))
+                stats = rag.build_knowledge_base()
+            st.session_state.rag = rag
+            st.session_state.index_info = (folder.name if persist_dir else "uploaded files", stats)
+            if stats.total_chunks == 0:
+                st.warning("⚠️ No supported source files were found.")
+            else:
+                st.success("✅ Knowledge base ready!")
+        except Exception as exc:
+            st.error(f"⚠️ {exc}")
 
-        if folder_path and os.path.exists(folder_path):
-            with st.spinner("🔄 Loading & embedding documents..."):
-                loaders = [
-                    DirectoryLoader(path=folder_path, glob="**/*.py", loader_cls=PythonLoader),
-                    DirectoryLoader(path=folder_path, glob="**/*.md", loader_cls=TextLoader),
-                    DirectoryLoader(path=folder_path, glob="**/*.json", loader_cls=JSONLoader),
-                ]
-                docs = []
-                for loader in loaders:
-                    docs.extend(loader.load())
-
-                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-                texts = splitter.split_documents(docs)
-
-                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                vectordb = Chroma.from_documents(texts, embeddings, persist_directory="./chroma_db")
-                vectordb.persist()
-                st.session_state.vectordb = vectordb
-
-            st.success("✅ Knowledge base built successfully!")
-
-            if uploaded_files:
-                st.markdown("### 📄 Uploaded Files")
-                for file in uploaded_files:
-                    st.write(file.name)
-        else:
-            st.warning("⚠️ Invalid folder or no files uploaded.")
+    if st.session_state.index_info:
+        name, stats = st.session_state.index_info
+        st.caption(
+            f"**{name}**: {stats.total_files} files, {stats.total_chunks} chunks · "
+            f"{stats.files_added} new, {stats.files_updated} changed, {stats.files_removed} removed, "
+            f"{stats.files_unchanged} unchanged"
+        )
 
     st.markdown("---")
     st.caption("💡 Tip: Upload files or use a local folder before asking questions.")
     st.markdown("🔗 [GitHub Repo](https://github.com/Lingesh-S/codebase-rag-assistant)")
 
+
 # --- Chat Section ---
 st.markdown("### 💬 Ask a question about your codebase")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        render_sources(message.get("sources", []))
 
 query = st.chat_input("Ask your question here...")
 
 if query:
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages
+        if m.get("in_history", True) and m.get("content")
+    ]
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query)
 
-    if "vectordb" in st.session_state and st.session_state.vectordb:
-        with st.chat_message("assistant"):
-            with st.spinner("🤖 Thinking..."):
-                llm = HuggingFaceHub(
-                    repo_id=model_name,
-                    model_kwargs={"temperature": temperature, "max_new_tokens": max_tokens},
-                    huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
-                )
-                qa = RetrievalQA.from_chain_type(llm=llm, retriever=st.session_state.vectordb.as_retriever())
-                response = qa.run(query)
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-    else:
-        st.warning("⚠️ Please build the knowledge base first.")
+    rag = st.session_state.rag
+    in_history = False
+    with st.chat_message("assistant"):
+        if rag is None:
+            content, sources = "⚠️ Please build the knowledge base first.", []
+            st.markdown(content)
+        else:
+            try:
+                llm = None
+                if provider != "none" and model_name:
+                    llm = get_llm(provider, model_name, temperature=temperature, max_tokens=max_tokens)
+                with st.spinner("🔍 Searching the codebase..."):
+                    answer = rag.stream_answer(query, llm, history, rewrite_followups=rewrite_followups,
+                                               k=top_k, rerank=use_reranker)
+                if answer.search_query != query:
+                    st.caption(f"Searched for: _{answer.search_query}_")
+                if answer.stream is None:
+                    content = "Retrieval-only mode: no LLM is configured, so here is the most relevant code."
+                    st.markdown(content)
+                else:
+                    content = st.write_stream(answer.stream)
+                    in_history = True
+                sources = source_dicts(answer.sources)
+            except Exception as exc:
+                content, sources = f"⚠️ The request failed: {exc}", []
+                st.markdown(content)
+            render_sources(sources)
+
+    st.session_state.messages.append({"role": "assistant", "content": content, "sources": sources, "in_history": in_history})
