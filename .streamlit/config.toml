@@ -1,4 +1,8 @@
 # .streamlit/config.toml
 
-[python]
-version = "3.10"
+[server]
+# Allow zipped projects to be uploaded (MB).
+maxUploadSize = 100
+
+[browser]
+gatherUsageStats = false
