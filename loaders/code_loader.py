@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -89,7 +90,8 @@ IGNORED_FILE_PATTERNS = [
     "uv.lock",
 ]
 
-MAX_FILE_BYTES = 1_000_000
+# Source files are rarely this big; larger ones are data dumps or generated bundles.
+MAX_FILE_BYTES = int(os.getenv("RAG_MAX_FILE_KB", "200")) * 1024
 
 
 def is_ignored_file(name: str) -> bool:
@@ -97,14 +99,44 @@ def is_ignored_file(name: str) -> bool:
     return any(fnmatch.fnmatch(lower, pattern) for pattern in IGNORED_FILE_PATTERNS)
 
 
-def iter_code_files(root: Path):
+def is_ignored_dir(name: str) -> bool:
+    return name in IGNORED_DIRS or name.endswith(".egg-info")
+
+
+def git_listed_files(root: Path) -> list[Path] | None:
+    """Files git counts as part of the project (tracked plus untracked, minus .gitignore); None outside a repo."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git, "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return sorted(root / name for name in result.stdout.decode("utf-8", "replace").split("\0") if name)
+
+
+def walk_files(root: Path):
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune in place so os.walk never descends into ignored folders.
-        dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS and not d.endswith(".egg-info"))
+        dirnames[:] = sorted(d for d in dirnames if not is_ignored_dir(d))
         for filename in sorted(filenames):
-            path = Path(dirpath) / filename
-            if path.suffix.lower() in SUPPORTED_EXTENSIONS and not is_ignored_file(filename):
-                yield path
+            yield Path(dirpath) / filename
+
+
+def iter_code_files(root: Path):
+    # Inside a git repository, git's own file list honours every .gitignore, which drops generated
+    # output such as coverage reports and build folders; elsewhere the folder is walked.
+    listed = git_listed_files(root)
+    for path in listed if listed is not None else walk_files(root):
+        if any(is_ignored_dir(part) for part in path.relative_to(root).parts[:-1]):
+            continue
+        if path.suffix.lower() in SUPPORTED_EXTENSIONS and not is_ignored_file(path.name) and path.is_file():
+            yield path
 
 
 def read_text(path: Path, max_bytes: int = MAX_FILE_BYTES) -> str | None:

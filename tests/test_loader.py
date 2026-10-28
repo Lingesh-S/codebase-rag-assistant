@@ -74,3 +74,31 @@ def test_extract_zip_rejects_path_traversal(tmp_path):
     with pytest.raises(ValueError, match="Unsafe path"):
         extract_zip(make_zip({"../escaped.py": "x = 1\n"}), target)
     assert not (tmp_path / "escaped.py").exists()
+
+
+def git(*args, cwd):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_git_repos_respect_gitignore(tmp_path):
+    (tmp_path / ".gitignore").write_text("htmlcov/\n*.log.json\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("print('tracked')\n", encoding="utf-8")
+    (tmp_path / "new_module.py").write_text("print('untracked but not ignored')\n", encoding="utf-8")
+    (tmp_path / "htmlcov").mkdir()
+    (tmp_path / "htmlcov" / "index.html").write_text("<html>coverage report</html>\n", encoding="utf-8")
+    (tmp_path / "run.log.json").write_text('{"log": true}\n', encoding="utf-8")
+    git("init", "-q", cwd=tmp_path)
+    git("add", "app.py", ".gitignore", cwd=tmp_path)
+
+    sources = {d.metadata["source"] for d in load_codebase(tmp_path)}
+
+    assert sources == {"app.py", "new_module.py"}
+
+
+def test_files_over_the_size_limit_are_skipped(tmp_path):
+    (tmp_path / "small.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "dump.json").write_text('{"rows": "' + "x" * 300_000 + '"}', encoding="utf-8")
+
+    assert {d.metadata["source"] for d in load_codebase(tmp_path)} == {"small.py"}
