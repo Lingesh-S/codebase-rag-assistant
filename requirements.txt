@@ -2,6 +2,10 @@
 streamlit>=1.50,<2
 python-dotenv>=1.0,<2
 
+# API service
+fastapi>=0.162,<1
+uvicorn>=0.54,<1
+
 # Indexing and retrieval (ONNX models via fastembed, no PyTorch needed)
 langchain-core>=1.0,<2
 langchain-text-splitters>=1.0,<2

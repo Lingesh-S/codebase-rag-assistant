@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, rag-upgrade]
+    branches: [main, phase-2]
   pull_request:
 
 jobs:

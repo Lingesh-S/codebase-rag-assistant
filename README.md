@@ -19,6 +19,7 @@ Explore your own project files with natural language queries — understand, deb
 
 ## 🔧 Tech Stack
 - **Streamlit** — chat UI with streamed answers and expandable sources
+- **FastAPI** — HTTP API with background index jobs and answers streamed as server-sent events
 - **ChromaDB** — persistent vector store (cosine HNSW)
 - **fastembed** — ONNX embedding and reranking models on CPU, no PyTorch needed
 - **rank-bm25** — keyword search with a code-aware tokenizer
@@ -61,6 +62,7 @@ Explore your own project files with natural language queries — understand, deb
 ```bash
 codebase-rag-assistant/
 ├── streamlit/app.py         # Streamlit chat UI
+├── api/                     # FastAPI service: repos, index jobs, search, streamed chat
 ├── rag_pipeline/
 │   ├── pipeline.py          # RAGPipeline: index, retrieve, answer
 │   ├── generator.py         # prompts + Hugging Face / Anthropic / Ollama clients
@@ -121,8 +123,8 @@ The first index build downloads the embedding model (~70 MB) once; the optional 
 streamlit run streamlit/app.py
 ```
 
-1. Pick a folder path (defaults to `sample_codebase`) or upload files / a `.zip` of your project.
-2. Click **Build / Update Knowledge Base**. Click it again after editing code: only changed files are re-embedded.
+1. Pick a folder path (defaults to `sample_codebase`), a public GitHub repository URL, or upload files / a `.zip` of your project.
+2. Click **Build index**. Click it again after editing code: only changed files are re-embedded.
 3. Ask questions in the chat. Answers stream in with `[n]` citations; expand **Sources** to see the exact code.
 
 **Terminal**
@@ -134,6 +136,22 @@ python -m rag_pipeline.main --path ../my-project --provider ollama -q "Where is 
 
 Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--mode {hybrid,dense,bm25}`, `--rerank`, `--rebuild`.
 
+**API**
+
+```bash
+python -m api            # http://127.0.0.1:8000, interactive docs at /docs
+```
+
+| Endpoint | What it does |
+|---|---|
+| `POST /repos` | Registers `{"path": "..."}` or `{"github_url": "https://github.com/owner/repo"}` and returns its id |
+| `POST /repos/{id}/index` | Starts a background index job (or returns the one already running) |
+| `GET /jobs/{job_id}` | Job status, stage and progress (`done` of `total`) |
+| `POST /repos/{id}/search` | `{"query": "...", "k": 6}`: ranked passages with file and line numbers |
+| `POST /repos/{id}/chat` | `{"question": "...", "history": [...]}`: streams `step`, `sources` and `token` events, then `done` or `error` |
+
+The API, the CLI and the web app give the same folder or GitHub repository the same index, so an index built in one is reused by the others. Registered repositories live in memory, so register them again after a restart; their indexes stay on disk.
+
 ---
 
 ## ⚙️ Configuration
@@ -144,7 +162,9 @@ Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--m
 | `RAG_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Any fastembed cross-encoder |
 | `RAG_EMBEDDING_DEVICE` | `auto` | `auto` uses an NVIDIA GPU when `onnxruntime-gpu` is installed; `cpu` forces the CPU |
 | `RAG_PERSIST_DIR` | `chroma_db` | Where the vector index is stored |
-| `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input to one directory tree. Set this on public deployments. |
+| `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input (web app and API) to one directory tree. Set this on public deployments. |
+| `RAG_REPO_CACHE` | `.repos` | Where the API clones GitHub repositories |
+| `RAG_WARM_UP` | `1` | `0` skips loading the embedding model and the Ollama model at startup |
 | `HF_MODEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OLLAMA_MODEL`, `OLLAMA_HOST` | see `.env.example` | Provider overrides |
 
 ---
