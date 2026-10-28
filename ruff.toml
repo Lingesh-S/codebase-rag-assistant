@@ -13,7 +13,7 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/*" = ["S105", "S106"]  # tests pass dummy tokens such as "hf_test"
+"tests/*" = ["S105", "S106", "S607"]  # dummy tokens such as "hf_test"; tests run git by name
 
 [lint.pylint]
 max-args = 7
