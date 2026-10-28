@@ -13,6 +13,10 @@ def no_llm(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:9")  # nothing listens here
     monkeypatch.setenv("RAG_PERSIST_DIR", str(tmp_path / "chroma"))
+    # The app caches provider and model detection; clear it so one test's fakes never leak into the next.
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
 
 
 def test_app_renders_and_asks_for_an_index_first(no_llm):
@@ -32,7 +36,6 @@ def test_ollama_model_defaults_to_the_configured_model(no_llm, monkeypatch):
 
     monkeypatch.setattr(generator, "ollama_models", lambda: ["qwen2.5-coder:7b", "qwen3.5:4b", "gpt-oss:20b"])
     monkeypatch.setitem(generator.DEFAULT_MODELS, "ollama", "qwen3.5:4b")
-    st.cache_data.clear()  # provider detection is cached between runs
 
     at = AppTest.from_file(APP, default_timeout=60).run()
 
