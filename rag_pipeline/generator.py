@@ -239,7 +239,8 @@ def huggingface_token() -> str | None:
 
 
 def ollama_host() -> str:
-    return os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    # Not "localhost": on Windows it tries IPv6 first and each call waits ~2 s before falling back to IPv4.
+    return os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 
 
 def ollama_models() -> list[str]:

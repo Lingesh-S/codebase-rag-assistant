@@ -361,3 +361,10 @@ def test_ollama_answers_keep_the_model_loaded():
     "".join(llm.stream("system", [{"role": "user", "content": "q"}]))
 
     assert llm.client.requests[0]["keep_alive"] == llm.keep_alive
+
+
+def test_ollama_defaults_to_the_ipv4_loopback(monkeypatch):
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    # "localhost" tries IPv6 first on Windows, and every call waited ~2.4 s for it while Ollama listens on 127.0.0.1.
+    assert generator.ollama_host() == "http://127.0.0.1:11434"
