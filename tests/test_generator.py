@@ -169,9 +169,11 @@ class FakeOllamaClient:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
         self.calls = 0
+        self.requests: list[dict] = []
 
     def chat(self, **kwargs):
         self.calls += 1
+        self.requests.append(kwargs)
         outcome = self.outcomes.pop(0)
 
         def parts():
@@ -275,3 +277,87 @@ def test_get_llm_builds_each_provider_and_drops_temperature_for_claude():
     claude = get_llm("anthropic", api_key="test-key", temperature=0.7)
     assert isinstance(claude, AnthropicLLM)
     assert not hasattr(claude, "temperature")
+
+
+FOLLOW_UP_HISTORY = [
+    {"role": "user", "content": "How does the writer agent build its prompt?"},
+    {"role": "assistant", "content": "It joins the research notes into one prompt."},
+]
+
+
+@pytest.mark.parametrize(
+    "question", ["and the title?", "How does it handle errors?", "What about the second one?", "why?", "Show me those"]
+)
+def test_follow_ups_that_refer_back_are_rewritten(question):
+    llm = FakeLLM("How does the writer agent generate the title?")
+
+    assert condense_question(llm, question, FOLLOW_UP_HISTORY) == "How does the writer agent generate the title?"
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["Where are agent metrics logged?", "How does LLMProvider choose a model?", "Explain the CLI entry point"],
+)
+def test_standalone_questions_skip_the_rewrite(question):
+    llm = FakeLLM()
+
+    assert condense_question(llm, question, FOLLOW_UP_HISTORY) == question
+    assert llm.calls == []
+
+
+def test_rewrite_asks_for_a_short_answer_with_low_effort():
+    llm = FakeLLM("A standalone question?")
+
+    condense_question(llm, "and the title?", FOLLOW_UP_HISTORY)
+
+    assert llm.calls[0]["effort"] == "low"
+    assert llm.calls[0]["max_tokens"] <= 128
+
+
+def test_ollama_turns_reasoning_off_for_low_effort_calls():
+    llm = make_ollama([["Rewritten?"], ["Full answer"]])
+
+    "".join(llm.stream("system", [{"role": "user", "content": "q"}], max_tokens=128, effort="low"))
+    "".join(llm.stream("system", [{"role": "user", "content": "q"}]))
+
+    quick, normal = llm.client.requests
+    assert quick["think"] is False
+    assert quick["options"]["num_predict"] == 128
+    assert "think" not in normal  # answers keep the model's own reasoning setting
+
+
+def test_huggingface_low_effort_calls_keep_room_for_hosted_reasoning():
+    calls = []
+
+    def chat_completion(**kwargs):
+        calls.append(kwargs)
+        return iter([hf_chunk("ok")])
+
+    llm = HuggingFaceLLM(token="hf_test", max_tokens=900)
+    llm.client = SimpleNamespace(chat_completion=chat_completion)
+
+    "".join(llm.stream("s", [{"role": "user", "content": "q"}], max_tokens=128, effort="low"))
+    "".join(llm.stream("s", [{"role": "user", "content": "q"}], max_tokens=300))
+
+    assert calls[0]["max_tokens"] >= 1024  # gpt-oss reasons before it answers, even for a one-line rewrite
+    assert calls[1]["max_tokens"] == 300
+
+
+def test_ollama_warm_up_loads_the_model_with_the_answer_settings():
+    llm = make_ollama([[]])
+
+    llm.warm_up()
+
+    [request] = llm.client.requests
+    assert request["messages"] == []
+    assert request["options"]["num_ctx"] == llm.num_ctx  # a different window would force a reload later
+    assert request["keep_alive"] == llm.keep_alive
+
+
+def test_ollama_answers_keep_the_model_loaded():
+    llm = make_ollama([["ok"]])
+
+    "".join(llm.stream("system", [{"role": "user", "content": "q"}]))
+
+    assert llm.client.requests[0]["keep_alive"] == llm.keep_alive

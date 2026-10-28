@@ -1,6 +1,7 @@
 # rag_pipeline/generator.py
 
 import os
+import re
 from collections.abc import Iterator
 from contextlib import suppress
 from typing import Protocol
@@ -18,6 +19,34 @@ DEFAULT_MODELS = {
 
 MAX_CONTEXT_CHARS = 16_000
 HISTORY_MESSAGES = 6
+REWRITE_MAX_TOKENS = 128  # a rewritten question is one sentence
+HOSTED_REASONING_TOKENS = 1024
+
+# Words that point back at the conversation; a question with none of them can be searched as it stands.
+REFERRING_WORDS = {
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "they",
+    "them",
+    "their",
+    "there",
+    "here",
+    "he",
+    "she",
+    "above",
+    "previous",
+    "earlier",
+    "same",
+    "other",
+    "former",
+    "latter",
+    "one",
+    "ones",
+}
 
 SYSTEM_PROMPT = "\n".join(
     [
@@ -70,10 +99,14 @@ class HuggingFaceLLM:
         self.client = InferenceClient(provider="auto", api_key=token or huggingface_token())
 
     def stream(self, system, messages, max_tokens=None, effort=None):
+        budget = max_tokens or self.max_tokens
+        if effort == "low":
+            # Hosted reasoning models (gpt-oss) think before they answer, even for a one-line rewrite.
+            budget = max(budget, HOSTED_REASONING_TOKENS)
         response = self.client.chat_completion(
             messages=[{"role": "system", "content": system}, *messages],
             model=self.model,
-            max_tokens=max_tokens or self.max_tokens,
+            max_tokens=budget,
             temperature=self.temperature,
             stream=True,
         )
@@ -140,6 +173,15 @@ class OllamaLLM:
         # Ollama silently truncates prompts longer than num_ctx, so leave room for the retrieved context.
         # A larger window pushes more of the model out of the GPU into system RAM.
         self.num_ctx = num_ctx or int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+        # Every request resets Ollama's unload timer; keep the model loaded between questions.
+        self.keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+    def warm_up(self) -> None:
+        """Loads the model now, with the window answers use, so the first question does not wait for it."""
+        with suppress(Exception):
+            self.client.chat(
+                model=self.model, messages=[], options={"num_ctx": self.num_ctx}, keep_alive=self.keep_alive
+            )
 
     def stream(self, system, messages, max_tokens=None, effort=None):
         from ollama import ResponseError
@@ -149,6 +191,9 @@ class OllamaLLM:
             "num_predict": max_tokens or self.max_tokens,
             "num_ctx": self.num_ctx,
         }
+        # Quick calls skip hidden reasoning: a thinking model (qwen3.5, gpt-oss) would otherwise spend the
+        # whole budget reasoning and return nothing. Answers keep the model's own setting.
+        quick = {"think": False} if effort == "low" else {}
         for attempt in (1, 2):
             started = False
             try:
@@ -157,6 +202,8 @@ class OllamaLLM:
                     messages=[{"role": "system", "content": system}, *messages],
                     stream=True,
                     options=options,
+                    keep_alive=self.keep_alive,
+                    **quick,
                 )
                 for part in response:
                     if part.message.content:
@@ -272,9 +319,20 @@ def complete(
     return "".join(llm.stream(system, messages, max_tokens=max_tokens, effort=effort))
 
 
+def is_follow_up(question: str) -> bool:
+    """True when a question leans on the conversation ("and the title?", "how does it work?")."""
+    lower = question.lower().strip()
+    words = re.findall(r"[a-z_']+", lower)
+    return (
+        len(words) <= 4
+        or re.match(r"(and|also|but|so|then|what about|how about)\b", lower) is not None
+        or any(word in REFERRING_WORDS for word in words)
+    )
+
+
 def condense_question(llm: LLM, question: str, history: list[dict] | None) -> str:
     """Rewrites a follow-up ("what about the second one?") into a standalone search query."""
-    if not history:
+    if not history or not is_follow_up(question):
         return question
     transcript = "\n".join(f"{m['role']}: {m['content'][:1000]}" for m in trim_history(history))
     prompt = (
@@ -283,7 +341,11 @@ def condense_question(llm: LLM, question: str, history: list[dict] | None) -> st
     )
     try:
         rewritten = complete(
-            llm, CONDENSE_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], max_tokens=2048, effort="low"
+            llm,
+            CONDENSE_SYSTEM_PROMPT,
+            [{"role": "user", "content": prompt}],
+            max_tokens=REWRITE_MAX_TOKENS,
+            effort="low",
         )
     except Exception:
         return question
