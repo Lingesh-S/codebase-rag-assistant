@@ -47,6 +47,23 @@ class Answer:
     stream: Iterator[str] | None = None  # None in retrieval-only mode (no LLM configured)
 
 
+# Events from RAGPipeline.answer_events, in the order a client should show them.
+@dataclass
+class Step:
+    label: str
+
+
+@dataclass
+class Sources:
+    search_query: str
+    chunks: list[StoredChunk]
+
+
+@dataclass
+class Token:
+    text: str
+
+
 class RAGPipeline:
     """Index a codebase and answer questions about it with cited sources."""
 
@@ -92,6 +109,31 @@ class RAGPipeline:
             self.retriever.reranker = get_reranker(self.settings.rerank_model)
         return self.retriever.retrieve(query, k or self.settings.top_k, self.settings.retrieval_mode, rerank)
 
+    def answer_events(
+        self,
+        question: str,
+        llm: LLM | None = None,
+        history: list[dict] | None = None,
+        rewrite_followups: bool = True,
+        k: int | None = None,
+        rerank: bool = False,
+    ) -> Iterator[Step | Sources | Token]:
+        """Yields an answer as it is produced: progress steps, the sources used, then the reply's tokens."""
+        search_query = question
+        if llm is not None and history and rewrite_followups and is_follow_up(question):
+            yield Step("Rewriting the follow-up question")
+            search_query = condense_question(llm, question, history)
+        yield Step("Searching the codebase")
+        chunks = self.retrieve(search_query, k, rerank)
+        if llm is None:
+            yield Sources(search_query, chunks)
+            return
+        messages, used = build_messages(question, chunks, history, self.settings.max_context_chars)
+        yield Sources(search_query, used)
+        yield Step("Writing the answer")
+        for text in llm.stream(SYSTEM_PROMPT, messages):
+            yield Token(text)
+
     def stream_answer(
         self,
         question: str,
@@ -102,18 +144,18 @@ class RAGPipeline:
         rerank: bool = False,
         on_step: Callable[[str], None] | None = None,
     ) -> Answer:
+        """Runs answer_events up to the sources and returns them with the reply still to stream."""
         step = on_step or (lambda label: None)
-        search_query = question
-        if llm is not None and history and rewrite_followups and is_follow_up(question):
-            step("Rewriting the follow-up question")
-            search_query = condense_question(llm, question, history)
-        step("Searching the codebase")
-        chunks = self.retrieve(search_query, k, rerank)
-        if llm is None:
-            return Answer(question, search_query, chunks)
-        messages, used = build_messages(question, chunks, history, self.settings.max_context_chars)
-        step("Writing the answer")
-        return Answer(question, search_query, used, llm.stream(SYSTEM_PROMPT, messages))
+        events = self.answer_events(question, llm, history, rewrite_followups, k, rerank)
+        for event in events:
+            if isinstance(event, Sources):
+                break
+            step(event.label)
+        answer = Answer(question, event.search_query, event.chunks)
+        if llm is not None:
+            step(next(events).label)
+            answer.stream = (token.text for token in events)
+        return answer
 
     def answer(self, question: str, llm: LLM, history: list[dict] | None = None, **kwargs) -> tuple[str, Answer]:
         result = self.stream_answer(question, llm, history, **kwargs)
