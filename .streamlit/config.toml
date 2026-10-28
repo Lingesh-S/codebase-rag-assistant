@@ -1,4 +1,13 @@
 # .streamlit/config.toml
 
-[python]
-version = "3.10"
+[server]
+# Allow zipped projects to be uploaded (MB).
+maxUploadSize = 100
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# Dark base with the header's accent colour, so the custom header and the widgets match.
+base = "dark"
+primaryColor = "#3cc2ff"

@@ -1,0 +1,22 @@
+[
+  {"question": "How are user passwords hashed?", "expected_sources": ["inventory/auth.py"]},
+  {"question": "How is a password checked against the stored hash?", "expected_sources": ["inventory/auth.py"]},
+  {"question": "How long are API tokens valid?", "expected_sources": ["inventory/auth.py", "config.json"]},
+  {"question": "What happens if I try to ship more units than are in stock?", "expected_sources": ["inventory/service.py"]},
+  {"question": "Which products need to be reordered?", "expected_sources": ["inventory/service.py", "inventory/models.py"]},
+  {"question": "How is the total value of the inventory computed?", "expected_sources": ["inventory/service.py", "inventory/models.py"]},
+  {"question": "Where are stock movements recorded for auditing?", "expected_sources": ["inventory/service.py", "inventory/models.py"]},
+  {"question": "InsufficientStockError", "expected_sources": ["inventory/service.py"]},
+  {"question": "How does saving avoid corrupting the inventory file if the process crashes?", "expected_sources": ["inventory/storage.py"]},
+  {"question": "JsonInventoryRepository load", "expected_sources": ["inventory/storage.py"]},
+  {"question": "What fields does a Product have?", "expected_sources": ["inventory/models.py"]},
+  {"question": "Why are prices stored as integers?", "expected_sources": ["inventory/models.py"]},
+  {"question": "What kinds of stock movement exist?", "expected_sources": ["inventory/models.py"]},
+  {"question": "Which command line subcommands are available?", "expected_sources": ["inventory/cli.py"]},
+  {"question": "How does the JavaScript client retry failed requests?", "expected_sources": ["web/api_client.js"]},
+  {"question": "removeStock API call", "expected_sources": ["web/api_client.js"]},
+  {"question": "What is the default low stock threshold in the configuration?", "expected_sources": ["config.json"]},
+  {"question": "What does this sample project do?", "expected_sources": ["README.md"]},
+  {"question": "What does the greet function return?", "expected_sources": ["greetings.py"]},
+  {"question": "How do I multiply two numbers?", "expected_sources": ["math_utils.py"]}
+]

@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Local vector index (rebuilt on demand)
+chroma_db/
+
+# Cloned GitHub repositories (re-created on demand)
+.repos/
