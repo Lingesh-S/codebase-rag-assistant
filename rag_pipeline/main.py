@@ -66,6 +66,7 @@ def main(argv=None) -> int:
         f"(new {stats.files_added}, changed {stats.files_updated}, "
         f"removed {stats.files_removed}, unchanged {stats.files_unchanged})"
     )
+    print(f"Embeddings: {rag.store.embedding_model} on {getattr(rag.store.embedding, 'device', 'cpu').upper()}")
 
     provider = args.provider or next(iter(available_providers()), "none")
     llm = None if provider == "none" else get_llm(provider, args.model)

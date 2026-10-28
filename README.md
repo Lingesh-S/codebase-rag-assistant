@@ -91,6 +91,15 @@ venv\Scripts\activate          # Windows  (macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**Optional: NVIDIA GPU.** Embedding every chunk is the slowest part of indexing on a CPU. To run it on an NVIDIA GPU (a driver with CUDA 13 support), swap ONNX Runtime for its GPU build after installing the requirements:
+
+```bash
+pip uninstall -y onnxruntime
+pip install "onnxruntime-gpu[cuda,cudnn]==1.31.1"
+```
+
+The embedding model and reranker then use the GPU automatically, and fall back to the CPU if CUDA cannot start. The sidebar and the CLI show which one is in use; set `RAG_EMBEDDING_DEVICE=cpu` to force the CPU.
+
 Then configure at least one LLM provider by copying `.env.example` to `.env`:
 
 | Provider | Setting | Default model |
@@ -133,6 +142,7 @@ Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--m
 |---|---|---|
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Any fastembed text model, e.g. `jinaai/jina-embeddings-v2-base-code` for large codebases |
 | `RAG_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Any fastembed cross-encoder |
+| `RAG_EMBEDDING_DEVICE` | `auto` | `auto` uses an NVIDIA GPU when `onnxruntime-gpu` is installed; `cpu` forces the CPU |
 | `RAG_PERSIST_DIR` | `chroma_db` | Where the vector index is stored |
 | `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input to one directory tree. Set this on public deployments. |
 | `HF_MODEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OLLAMA_MODEL`, `OLLAMA_HOST` | see `.env.example` | Provider overrides |
