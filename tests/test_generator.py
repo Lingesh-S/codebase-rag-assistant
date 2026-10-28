@@ -6,6 +6,7 @@ from ollama import ResponseError
 from rag_pipeline import generator
 from rag_pipeline.generator import (
     AnthropicLLM,
+    HuggingFaceLLM,
     OllamaLLM,
     build_messages,
     condense_question,
@@ -21,7 +22,13 @@ def chunk(source, start, end, code, symbol=""):
     return StoredChunk(
         id=f"{source}:{start}",
         text=f"{header}\n\n{code}",
-        metadata={"source": source, "start_line": start, "end_line": end, "symbol": symbol, "header_lines": header.count("\n") + 2},
+        metadata={
+            "source": source,
+            "start_line": start,
+            "end_line": end,
+            "symbol": symbol,
+            "header_lines": header.count("\n") + 2,
+        },
     )
 
 
@@ -49,7 +56,7 @@ def test_messages_contain_history_context_and_question():
 
     assert messages[:2] == history
     assert messages[-1]["role"] == "user"
-    assert messages[-1]["content"].startswith("<context>\n<source id=\"1\"")
+    assert messages[-1]["content"].startswith('<context>\n<source id="1"')
     assert "Question: What does a do?" in messages[-1]["content"]
     assert messages[-1]["content"].endswith("cite them inline, e.g. [1].")
     assert len(used) == 1
@@ -89,7 +96,7 @@ def test_unknown_provider_is_rejected():
 
 
 def test_available_providers_reads_environment(monkeypatch):
-    monkeypatch.setattr(generator, "ollama_models", lambda: [])
+    monkeypatch.setattr(generator, "ollama_models", list)
     for name in ["HF_TOKEN", "HUGGINGFACEHUB_API_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]:
         monkeypatch.delenv(name, raising=False)
     assert generator.available_providers() == []
@@ -226,3 +233,45 @@ def test_ollama_does_not_retry_client_errors():
     with pytest.raises(ResponseError):
         ask(llm)
     assert llm.client.calls == 1
+
+
+def hf_chunk(content):
+    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+
+
+def test_huggingface_streams_chat_completion_with_the_system_prompt():
+    calls = []
+
+    def chat_completion(**kwargs):
+        calls.append(kwargs)
+        # Providers send keep-alive chunks with no choices or empty deltas; they must be skipped.
+        return iter([SimpleNamespace(choices=[]), hf_chunk("Uses "), hf_chunk(None), hf_chunk("PBKDF2 [1].")])
+
+    llm = HuggingFaceLLM(token="hf_test", temperature=0.3, max_tokens=900)
+    llm.client = SimpleNamespace(chat_completion=chat_completion)
+
+    text = "".join(llm.stream("system prompt", [{"role": "user", "content": "q"}]))
+
+    assert text == "Uses PBKDF2 [1]."
+    request = calls[0]
+    assert request["model"] == "openai/gpt-oss-120b"
+    assert request["messages"][0] == {"role": "system", "content": "system prompt"}
+    assert request["messages"][1] == {"role": "user", "content": "q"}
+    assert (request["max_tokens"], request["temperature"], request["stream"]) == (900, 0.3, True)
+
+
+def test_huggingface_token_prefers_hf_token_over_the_legacy_name(monkeypatch):
+    monkeypatch.setenv("HUGGINGFACEHUB_API_TOKEN", "legacy")
+    monkeypatch.setenv("HF_TOKEN", "current")
+    assert generator.huggingface_token() == "current"
+
+    monkeypatch.delenv("HF_TOKEN")
+    assert generator.huggingface_token() == "legacy"
+
+
+def test_get_llm_builds_each_provider_and_drops_temperature_for_claude():
+    assert isinstance(get_llm("huggingface", "some/model", token="hf_test"), HuggingFaceLLM)
+    assert isinstance(get_llm("ollama", "qwen3.5:4b", host="http://127.0.0.1:9"), OllamaLLM)
+    claude = get_llm("anthropic", api_key="test-key", temperature=0.7)
+    assert isinstance(claude, AnthropicLLM)
+    assert not hasattr(claude, "temperature")
