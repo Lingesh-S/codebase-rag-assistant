@@ -1,13 +1,20 @@
 # rag_pipeline/pipeline.py
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from embeddings.embedder import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, get_embedding_model, get_reranker
 from loaders.code_loader import load_codebase
-from rag_pipeline.generator import LLM, MAX_CONTEXT_CHARS, SYSTEM_PROMPT, build_messages, condense_question
+from rag_pipeline.generator import (
+    LLM,
+    MAX_CONTEXT_CHARS,
+    SYSTEM_PROMPT,
+    build_messages,
+    condense_question,
+    is_follow_up,
+)
 from retriever.code_retriever import HybridRetriever
 from utils.chunker import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, chunk_documents
 from vectorstore.vector_store import CodeVectorStore, IndexStats, StoredChunk, collection_name_for
@@ -64,11 +71,19 @@ class RAGPipeline:
             self.store, reranker, candidate_k=self.settings.candidate_k, rerank_top_n=self.settings.rerank_top_n
         )
 
-    def build_knowledge_base(self) -> IndexStats:
-        """Loads, chunks and indexes the codebase; only new or changed files are re-embedded."""
+    def build_knowledge_base(self, progress: Callable[[str, int, int], None] | None = None) -> IndexStats:
+        """
+        Loads, chunks and indexes the codebase; only new or changed files are re-embedded.
+
+        progress(stage, done, total) is called as work advances, so a UI can show it.
+        """
+        report = progress or (lambda stage, done, total: None)
+        report("Reading files", 0, 0)
         documents = load_codebase(self.codebase_path)
+        report("Splitting code", len(documents), len(documents))
         chunks = chunk_documents(documents, self.settings.chunk_size, self.settings.chunk_overlap)
-        stats = self.store.sync(chunks)
+        stats = self.store.sync(chunks, progress=lambda done, total: report("Embedding", done, total))
+        report("Building keyword index", stats.total_chunks, stats.total_chunks)
         self.retriever.refresh()
         return stats
 
@@ -85,14 +100,19 @@ class RAGPipeline:
         rewrite_followups: bool = True,
         k: int | None = None,
         rerank: bool = False,
+        on_step: Callable[[str], None] | None = None,
     ) -> Answer:
+        step = on_step or (lambda label: None)
         search_query = question
-        if llm is not None and history and rewrite_followups:
+        if llm is not None and history and rewrite_followups and is_follow_up(question):
+            step("Rewriting the follow-up question")
             search_query = condense_question(llm, question, history)
+        step("Searching the codebase")
         chunks = self.retrieve(search_query, k, rerank)
         if llm is None:
             return Answer(question, search_query, chunks)
         messages, used = build_messages(question, chunks, history, self.settings.max_context_chars)
+        step("Writing the answer")
         return Answer(question, search_query, used, llm.stream(SYSTEM_PROMPT, messages))
 
     def answer(self, question: str, llm: LLM, history: list[dict] | None = None, **kwargs) -> tuple[str, Answer]:

@@ -62,3 +62,34 @@ def test_collection_names_are_stable_and_chroma_safe():
     name = collection_name_for("C:/Users/me/My Project")
     assert name == collection_name_for("C:/Users/me/My Project")
     assert name.startswith("code-") and name.replace("-", "").isalnum()
+
+
+def test_sync_reports_embedding_progress_per_batch(codebase, make_rag, monkeypatch):
+    from vectorstore import vector_store
+
+    monkeypatch.setattr(vector_store, "BATCH_SIZE", 2)
+    rag = make_rag(codebase)
+    calls = []
+
+    stats = rag.store.sync(rag_chunks(codebase), progress=lambda done, total: calls.append((done, total)))
+
+    assert calls[-1] == (stats.chunks_added, stats.chunks_added)
+    assert [done for done, _ in calls] == sorted(done for done, _ in calls)
+    assert len(calls) > 1
+
+
+def test_unchanged_sync_reports_no_embedding_work(codebase, make_rag):
+    rag = make_rag(codebase)
+    rag.store.sync(rag_chunks(codebase))
+    calls = []
+
+    rag.store.sync(rag_chunks(codebase), progress=lambda done, total: calls.append((done, total)))
+
+    assert calls == []
+
+
+def rag_chunks(root):
+    from loaders.code_loader import load_codebase
+    from utils.chunker import chunk_documents
+
+    return chunk_documents(load_codebase(root))

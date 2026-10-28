@@ -78,3 +78,32 @@ def test_importing_the_package_does_not_read_settings_before_env_is_loaded():
     )
 
     assert result.stdout.split() == ["False", "RAGPipeline"], result.stderr
+
+
+def test_build_reports_its_stages_in_order(codebase, make_rag):
+    rag = make_rag(codebase)
+    events = []
+
+    stats = rag.build_knowledge_base(progress=lambda stage, done, total: events.append((stage, done, total)))
+
+    stages = list(dict.fromkeys(stage for stage, _, _ in events))
+    assert stages == ["Reading files", "Splitting code", "Embedding", "Building keyword index"]
+    embedding = [(done, total) for stage, done, total in events if stage == "Embedding"]
+    assert embedding[-1] == (stats.chunks_added, stats.chunks_added)
+
+
+def test_answers_report_their_steps(codebase, make_rag):
+    rag = make_rag(codebase)
+    rag.build_knowledge_base()
+    steps = []
+
+    answer = rag.stream_answer("and the cart?", FakeLLM(), [{"role": "user", "content": "x"}], on_step=steps.append)
+    "".join(answer.stream)
+    rag.stream_answer("Where is the shopping cart?", on_step=steps.append)
+
+    assert steps == [
+        "Rewriting the follow-up question",
+        "Searching the codebase",
+        "Writing the answer",
+        "Searching the codebase",
+    ]

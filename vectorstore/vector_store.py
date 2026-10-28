@@ -2,6 +2,7 @@
 
 import hashlib
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import chromadb
@@ -35,7 +36,8 @@ def collection_name_for(identity: str) -> str:
     return "code-" + hashlib.sha1(identity.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
-def batched(items: list, size: int = BATCH_SIZE):
+def batched(items: list, size: int | None = None):
+    size = size or BATCH_SIZE
     for i in range(0, len(items), size):
         yield items[i : i + size]
 
@@ -68,7 +70,7 @@ class CodeVectorStore:
             return self._open_collection()
         return collection
 
-    def sync(self, chunks: list[Document]) -> IndexStats:
+    def sync(self, chunks: list[Document], progress: Callable[[int, int], None] | None = None) -> IndexStats:
         existing = self.collection.get(include=["metadatas"])
         indexed_hash: dict[str, str] = {}
         ids_by_source: dict[str, list[str]] = defaultdict(list)
@@ -94,6 +96,7 @@ class CodeVectorStore:
             self.collection.delete(ids=batch)
 
         new_chunks = [c for c in chunks if indexed_hash.get(c.metadata["source"]) != c.metadata["file_hash"]]
+        done = 0
         for batch in batched(new_chunks):
             texts = [c.page_content for c in batch]
             self.collection.upsert(
@@ -102,6 +105,9 @@ class CodeVectorStore:
                 metadatas=[c.metadata for c in batch],
                 embeddings=self.embedding.embed_documents(texts),
             )
+            done += len(batch)
+            if progress:
+                progress(done, len(new_chunks))
         stats.chunks_added = len(new_chunks)
         stats.total_chunks = self.collection.count()
         return stats
