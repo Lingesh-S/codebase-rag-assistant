@@ -1,0 +1,23 @@
+# Lint and format settings: run `ruff check .` and `ruff format .` from the project root.
+line-length = 120
+target-version = "py311"
+extend-exclude = ["sample_codebase", "venv"]
+
+[lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "RET", "PIE", "N", "S", "PL", "RUF"]
+ignore = [
+    "PLR2004",  # numeric thresholds and test values read fine inline
+    "S101",     # pytest relies on assert
+    "S603",     # subprocess is only called with fixed arguments
+    "PLC0415",  # provider SDKs are imported lazily so unused ones stay optional
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]  # tests pass dummy tokens such as "hf_test"
+
+[lint.pylint]
+max-args = 7
+
+[lint.isort]
+# The repo has a streamlit/ folder; keep the real package grouped with third-party imports.
+known-third-party = ["streamlit"]

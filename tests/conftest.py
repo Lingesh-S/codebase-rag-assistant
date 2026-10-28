@@ -21,7 +21,7 @@ class FakeEmbeddings(Embeddings):
         vector = [0.0] * self.dim
         vector[0] = 0.01  # keeps empty texts away from the zero vector
         for token in tokenize_code(text):
-            vector[int(hashlib.md5(token.encode()).hexdigest(), 16) % self.dim] += 1.0
+            vector[int(hashlib.md5(token.encode(), usedforsecurity=False).hexdigest(), 16) % self.dim] += 1.0
         norm = math.sqrt(sum(v * v for v in vector))
         return [v / norm for v in vector]
 
@@ -45,7 +45,7 @@ class FakeLLM:
     def stream(self, system, messages, max_tokens=None, effort=None):
         self.calls.append({"system": system, "messages": messages, "max_tokens": max_tokens, "effort": effort})
         for i in range(0, len(self.reply), 4):
-            yield self.reply[i:i + 4]
+            yield self.reply[i : i + 4]
 
 
 def write(root: Path, relative: str, content: str | bytes) -> Path:
@@ -61,7 +61,10 @@ def write(root: Path, relative: str, content: str | bytes) -> Path:
 @pytest.fixture
 def codebase(tmp_path) -> Path:
     root = tmp_path / "project"
-    write(root, "app/auth.py", '''
+    write(
+        root,
+        "app/auth.py",
+        '''
         """Password helpers."""
         import hashlib
 
@@ -69,8 +72,12 @@ def codebase(tmp_path) -> Path:
         def hash_password(password: str, salt: bytes) -> str:
             """Hashes a password with PBKDF2."""
             return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 1000).hex()
-    ''')
-    write(root, "app/cart.py", '''
+    ''',
+    )
+    write(
+        root,
+        "app/cart.py",
+        '''
         class ShoppingCart:
             """Holds items before checkout."""
 
@@ -82,12 +89,17 @@ def codebase(tmp_path) -> Path:
 
             def total_quantity(self):
                 return sum(q for _, q in self.items)
-    ''')
-    write(root, "web/client.js", '''
+    ''',
+    )
+    write(
+        root,
+        "web/client.js",
+        """
         export function fetchWithRetry(url, retries = 3) {
           return fetch(url).catch(() => (retries > 0 ? fetchWithRetry(url, retries - 1) : null));
         }
-    ''')
+    """,
+    )
     write(root, "README.md", "# Demo shop\n\nA tiny shop used in tests.\n")
     write(root, "settings.json", '{"currency": "EUR", "max_cart_items": 50}\n')
     # Everything below must be ignored by the loader.
@@ -111,6 +123,8 @@ def make_rag(tmp_path, fake_embeddings):
     def factory(root: Path, reranker=None, **settings) -> RAGPipeline:
         settings.setdefault("persist_dir", str(tmp_path / "chroma"))
         settings.setdefault("rerank_model", None)
-        return RAGPipeline(root, RAGSettings(**settings), collection_name="test-code", embedding=fake_embeddings, reranker=reranker)
+        return RAGPipeline(
+            root, RAGSettings(**settings), collection_name="test-code", embedding=fake_embeddings, reranker=reranker
+        )
 
     return factory

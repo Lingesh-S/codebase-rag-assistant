@@ -51,16 +51,42 @@ SUPPORTED_EXTENSIONS = {
 }
 
 IGNORED_DIRS = {
-    ".git", ".hg", ".svn", ".idea", ".vscode", "__pycache__", ".mypy_cache",
-    ".pytest_cache", ".ruff_cache", ".tox", ".nox", "venv", ".venv", "env",
-    "node_modules", "site-packages", "dist", "build", ".next", "target",
-    "chroma_db", ".ipynb_checkpoints",
+    ".git",
+    ".hg",
+    ".svn",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    "venv",
+    ".venv",
+    "env",
+    "node_modules",
+    "site-packages",
+    "dist",
+    "build",
+    ".next",
+    "target",
+    "chroma_db",
+    ".ipynb_checkpoints",
 }
 
 # Never index anything that commonly holds credentials, plus generated noise.
 IGNORED_FILE_PATTERNS = [
-    ".env*", "secrets.*", "credentials.*", "service-account*.json", "*.min.js",
-    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock",
+    ".env*",
+    "secrets.*",
+    "credentials.*",
+    "service-account*.json",
+    "*.min.js",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
 ]
 
 MAX_FILE_BYTES = 1_000_000

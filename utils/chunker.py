@@ -102,7 +102,7 @@ class CodeChunker:
         previous statement (floor is the line right after that statement).
         """
         start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
-        if any(line.strip() for line in lines[floor - 1:start - 1]):
+        if any(line.strip() for line in lines[floor - 1 : start - 1]):
             start = floor
         return start
 
@@ -142,7 +142,7 @@ class CodeChunker:
             return []
         if self._size(lines, start, end) <= self.chunk_size:
             return [(start, end, symbol)]
-        text = "\n".join(lines[start - 1:end])
+        text = "\n".join(lines[start - 1 : end])
         return [
             (start + s - 1, start + e - 1, symbol)
             for s, e, _ in self._splitter_spans(text, text.splitlines(), "python", symbol)
@@ -162,7 +162,7 @@ class CodeChunker:
 
     def _splitter(self, language: str) -> RecursiveCharacterTextSplitter:
         if language not in self._splitters:
-            kwargs = dict(chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap, add_start_index=True)
+            kwargs = {"chunk_size": self.chunk_size, "chunk_overlap": self.chunk_overlap, "add_start_index": True}
             try:
                 splitter = RecursiveCharacterTextSplitter.from_language(Language(language), **kwargs)
             except ValueError:
@@ -172,7 +172,7 @@ class CodeChunker:
 
     @staticmethod
     def _size(lines: list[str], start: int, end: int) -> int:
-        return sum(len(line) + 1 for line in lines[start - 1:end])
+        return sum(len(line) + 1 for line in lines[start - 1 : end])
 
     # ---- Output -------------------------------------------------------------------
 
@@ -183,8 +183,11 @@ class CodeChunker:
         header = [f"File: {source} (lines {start}-{end})"]
         if symbol:
             header.append(f"Symbol: {symbol}")
-        body = "\n".join(lines[start - 1:end])
-        chunk_id = hashlib.sha1(f"{source}:{doc.metadata.get('file_hash', '')}:{start}:{end}:{index}".encode()).hexdigest()
+        body = "\n".join(lines[start - 1 : end])
+        chunk_id = hashlib.sha1(
+            f"{source}:{doc.metadata.get('file_hash', '')}:{start}:{end}:{index}".encode(),
+            usedforsecurity=False,  # a stable ID, not a security boundary
+        ).hexdigest()
         return Document(
             id=chunk_id,
             page_content="\n".join(header) + "\n\n" + body,

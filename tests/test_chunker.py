@@ -9,13 +9,13 @@ def make_doc(text: str, language: str = "python", source: str = "pkg/module.py")
 
 def function_source(name: str, body_lines: int = 12) -> str:
     body = "\n".join(f"    value_{i} = '{name}' * {i}" for i in range(body_lines))
-    return f"def {name}(arg):\n    \"\"\"Docstring for {name}.\"\"\"\n{body}\n    return arg\n"
+    return f'def {name}(arg):\n    """Docstring for {name}."""\n{body}\n    return arg\n'
 
 
 def assert_body_matches_lines(chunk: Document, source_text: str) -> None:
     lines = source_text.splitlines()
     meta = chunk.metadata
-    expected = "\n".join(lines[meta["start_line"] - 1:meta["end_line"]])
+    expected = "\n".join(lines[meta["start_line"] - 1 : meta["end_line"]])
     assert chunk_body(chunk.page_content, meta["header_lines"]) == expected
 
 
@@ -48,7 +48,7 @@ def test_large_class_is_split_into_methods_with_qualified_symbols():
     methods = "\n".join(
         "    " + line if line else line
         for name in ["save", "load", "delete"]
-        for line in function_source(name).replace("(arg)", "(self, arg)").splitlines() + [""]
+        for line in [*function_source(name).replace("(arg)", "(self, arg)").splitlines(), ""]
     )
     text = 'class Repository:\n    """Stores records."""\n\n    table = "records"\n\n' + methods
     chunks = CodeChunker(chunk_size=600, chunk_overlap=0).split(make_doc(text))
@@ -64,7 +64,10 @@ def test_large_class_is_split_into_methods_with_qualified_symbols():
 
 
 def test_every_non_blank_python_line_lands_in_a_chunk():
-    methods = "\n".join("    " + line if line else line for line in function_source("process").replace("(arg)", "(self, arg)").splitlines())
+    methods = "\n".join(
+        "    " + line if line else line
+        for line in function_source("process").replace("(arg)", "(self, arg)").splitlines()
+    )
     text = (
         '"""Module docstring."""\nimport os\n\n# --- helpers ---\n\n'
         + "\n\n".join(function_source(f"fn_{i}") for i in range(3))
@@ -83,7 +86,10 @@ def test_every_non_blank_python_line_lands_in_a_chunk():
 
 def test_decorators_and_leading_comments_stay_with_their_function():
     filler = "\n\n".join(function_source(f"helper_{i}") for i in range(3))
-    text = filler + "\n\n# Cache results because parsing is slow.\n@functools.cache\ndef parse(path):\n    return open(path).read()\n"
+    parse_function = (
+        "# Cache results because parsing is slow.\n@functools.cache\ndef parse(path):\n    return open(path).read()\n"
+    )
+    text = filler + "\n\n" + parse_function
     chunks = CodeChunker(chunk_size=600, chunk_overlap=0).split(make_doc(text))
 
     [parse_chunk] = [c for c in chunks if "def parse(" in c.page_content]
@@ -102,7 +108,9 @@ def test_invalid_python_falls_back_to_text_splitting():
 
 
 def test_other_languages_get_line_ranges():
-    text = "\n\n".join(f"function handler{i}(req, res) {{\n  const value = compute({i});\n  res.send(value);\n}}" for i in range(40))
+    text = "\n\n".join(
+        f"function handler{i}(req, res) {{\n  const value = compute({i});\n  res.send(value);\n}}" for i in range(40)
+    )
     chunks = CodeChunker(chunk_size=400, chunk_overlap=0).split(make_doc(text, "js", "web/handlers.js"))
 
     assert len(chunks) > 1

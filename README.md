@@ -161,12 +161,14 @@ Reranking adds no gain on this small, already well-ranked set and costs a few se
 
 ---
 
-## 🧪 Tests
+## 🧪 Tests and code style
 
 ```bash
 pip install -r requirements-dev.txt
 pytest              # fast offline suite (fake embeddings, fake LLMs)
 pytest -m slow      # end-to-end app test with the real models
+ruff check .        # lint (rules in ruff.toml)
+ruff format .       # format to the project style (120-character lines)
 ```
 
 ---

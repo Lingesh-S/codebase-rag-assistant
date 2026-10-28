@@ -65,7 +65,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     cases = json.loads(Path(args.golden).read_text(encoding="utf-8"))
-    settings = RAGSettings(persist_dir=None, embedding_model=args.embedding_model, rerank_model=args.rerank_model, chunk_size=args.chunk_size)
+    settings = RAGSettings(
+        persist_dir=None,
+        embedding_model=args.embedding_model,
+        rerank_model=args.rerank_model,
+        chunk_size=args.chunk_size,
+    )
     rag = RAGPipeline(
         args.codebase,
         settings,
@@ -82,7 +87,11 @@ def main(argv=None):
     for name, mode, rerank in CONFIGS:
         result = evaluate(rag, cases, mode, rerank)
         all_misses[name] = result["misses"]
-        print(f"{name:<17}" + "".join(f"{result[f'hit@{c}']:>8.2f}" for c in CUTOFFS) + f"{result['mrr']:>8.3f}{result['ms_per_query']:>10.1f}")
+        print(
+            f"{name:<17}"
+            + "".join(f"{result[f'hit@{c}']:>8.2f}" for c in CUTOFFS)
+            + f"{result['mrr']:>8.3f}{result['ms_per_query']:>10.1f}"
+        )
 
     for name, misses in all_misses.items():
         for question in misses:

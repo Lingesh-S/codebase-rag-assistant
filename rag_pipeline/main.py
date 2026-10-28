@@ -25,11 +25,15 @@ from utils.chunker import chunk_body  # noqa: E402
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Ask questions about a codebase from the terminal.")
     parser.add_argument("--path", default="sample_codebase", help="folder to index (default: sample_codebase)")
-    parser.add_argument("--provider", choices=[*PROVIDERS, "none"], help="LLM backend (default: first one configured, else none)")
+    parser.add_argument(
+        "--provider", choices=[*PROVIDERS, "none"], help="LLM backend (default: first one configured, else none)"
+    )
     parser.add_argument("--model", help="model name for the chosen provider")
     parser.add_argument("-q", "--question", help="ask one question and exit")
     parser.add_argument("-k", type=int, default=6, help="number of chunks to retrieve (default: 6)")
-    parser.add_argument("--mode", choices=RETRIEVAL_MODES, default="hybrid", help="retrieval strategy (default: hybrid)")
+    parser.add_argument(
+        "--mode", choices=RETRIEVAL_MODES, default="hybrid", help="retrieval strategy (default: hybrid)"
+    )
     parser.add_argument("--rerank", action="store_true", help="reorder results with a cross-encoder (slower on CPU)")
     parser.add_argument("--rebuild", action="store_true", help="drop the existing index before indexing")
     return parser.parse_args(argv)
@@ -45,7 +49,7 @@ def print_sources(sources, with_code=False):
             print("      " + "\n      ".join(code.splitlines()[:12]))
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args(argv)
@@ -59,7 +63,8 @@ def main(argv=None):
     stats = rag.build_knowledge_base()
     print(
         f"Index ready: {stats.total_files} files, {stats.total_chunks} chunks "
-        f"(new {stats.files_added}, changed {stats.files_updated}, removed {stats.files_removed}, unchanged {stats.files_unchanged})"
+        f"(new {stats.files_added}, changed {stats.files_updated}, "
+        f"removed {stats.files_removed}, unchanged {stats.files_unchanged})"
     )
 
     provider = args.provider or next(iter(available_providers()), "none")
@@ -94,7 +99,7 @@ def main(argv=None):
             return False
 
     if args.question:
-        sys.exit(0 if safe_ask(args.question) else 1)
+        return 0 if safe_ask(args.question) else 1
 
     print("\nAsk questions about your codebase. Type 'exit' to quit.")
     while True:
@@ -106,7 +111,8 @@ def main(argv=None):
             break
         if question:
             safe_ask(question)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

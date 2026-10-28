@@ -65,7 +65,16 @@ def test_importing_the_package_does_not_read_settings_before_env_is_loaded():
     import sys
     from pathlib import Path
 
-    code = "import sys, rag_pipeline; print('rag_pipeline.generator' in sys.modules); from rag_pipeline import RAGPipeline; print(RAGPipeline.__name__)"
-    result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    code = (
+        "import sys, rag_pipeline; print('rag_pipeline.generator' in sys.modules); "
+        "from rag_pipeline import RAGPipeline; print(RAGPipeline.__name__)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,  # the assertion below reports stderr on failure
+    )
 
     assert result.stdout.split() == ["False", "RAGPipeline"], result.stderr

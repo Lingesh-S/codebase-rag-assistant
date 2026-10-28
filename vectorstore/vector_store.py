@@ -32,12 +32,12 @@ class StoredChunk:
 
 def collection_name_for(identity: str) -> str:
     """Stable, Chroma-safe collection name for a codebase (e.g. its resolved folder path)."""
-    return "code-" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+    return "code-" + hashlib.sha1(identity.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def batched(items: list, size: int = BATCH_SIZE):
     for i in range(0, len(items), size):
-        yield items[i:i + size]
+        yield items[i : i + size]
 
 
 class CodeVectorStore:
@@ -72,7 +72,7 @@ class CodeVectorStore:
         existing = self.collection.get(include=["metadatas"])
         indexed_hash: dict[str, str] = {}
         ids_by_source: dict[str, list[str]] = defaultdict(list)
-        for chunk_id, meta in zip(existing["ids"], existing["metadatas"]):
+        for chunk_id, meta in zip(existing["ids"], existing["metadatas"], strict=True):
             indexed_hash[meta["source"]] = meta.get("file_hash", "")
             ids_by_source[meta["source"]].append(chunk_id)
 
@@ -117,12 +117,17 @@ class CodeVectorStore:
         )
         return [
             StoredChunk(id=i, text=t, metadata=m, score=1.0 - d)
-            for i, t, m, d in zip(result["ids"][0], result["documents"][0], result["metadatas"][0], result["distances"][0])
+            for i, t, m, d in zip(
+                result["ids"][0], result["documents"][0], result["metadatas"][0], result["distances"][0], strict=True
+            )
         ]
 
     def all_chunks(self) -> list[StoredChunk]:
         result = self.collection.get(include=["documents", "metadatas"])
-        return [StoredChunk(id=i, text=t, metadata=m) for i, t, m in zip(result["ids"], result["documents"], result["metadatas"])]
+        return [
+            StoredChunk(id=i, text=t, metadata=m)
+            for i, t, m in zip(result["ids"], result["documents"], result["metadatas"], strict=True)
+        ]
 
     def count(self) -> int:
         return self.collection.count()

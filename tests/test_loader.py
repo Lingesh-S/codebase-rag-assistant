@@ -19,7 +19,15 @@ def test_loads_supported_files_with_relative_paths(codebase):
 
 def test_skips_ignored_folders_secrets_binaries_and_empty_files(codebase):
     sources = {d.metadata["source"] for d in load_codebase(codebase)}
-    for skipped in ["node_modules/lib/index.js", "venv/lib/site.py", ".git/config.json", ".env", "secrets.toml", "image.py", "empty.py"]:
+    for skipped in [
+        "node_modules/lib/index.js",
+        "venv/lib/site.py",
+        ".git/config.json",
+        ".env",
+        "secrets.toml",
+        "image.py",
+        "empty.py",
+    ]:
         assert skipped not in sources
     assert not any("super-secret" in d.page_content for d in load_codebase(codebase))
 

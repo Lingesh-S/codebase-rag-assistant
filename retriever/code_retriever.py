@@ -11,9 +11,43 @@ from vectorstore.vector_store import CodeVectorStore, StoredChunk
 RETRIEVAL_MODES = ("hybrid", "dense", "bm25")
 
 STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from",
-    "how", "i", "in", "is", "it", "me", "of", "on", "or", "show", "that", "the", "this",
-    "to", "what", "when", "where", "which", "who", "why", "with", "file", "lines", "symbol",
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "can",
+    "do",
+    "does",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "me",
+    "of",
+    "on",
+    "or",
+    "show",
+    "that",
+    "the",
+    "this",
+    "to",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+    "file",
+    "lines",
+    "symbol",
 }
 
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+")
@@ -70,7 +104,9 @@ class HybridRetriever:
     then optionally re-ordered by a cross-encoder reranker.
     """
 
-    def __init__(self, store: CodeVectorStore, reranker=None, candidate_k: int = 20, rrf_k: int = 60, rerank_top_n: int = 10):
+    def __init__(
+        self, store: CodeVectorStore, reranker=None, candidate_k: int = 20, rrf_k: int = 60, rerank_top_n: int = 10
+    ):
         self.store = store
         self.reranker = reranker
         self.candidate_k = candidate_k
@@ -115,8 +151,8 @@ class HybridRetriever:
             ]
 
         if rerank and self.reranker is not None and candidates:
-            head, tail = candidates[:self.rerank_top_n], candidates[self.rerank_top_n:]
+            head, tail = candidates[: self.rerank_top_n], candidates[self.rerank_top_n :]
             scores = self.reranker.score(query, [c.text for c in head])
-            ranked = sorted(zip(head, scores), key=lambda pair: pair[1], reverse=True)
+            ranked = sorted(zip(head, scores, strict=True), key=lambda pair: pair[1], reverse=True)
             candidates = [replace(c, score=s) for c, s in ranked] + tail
         return candidates[:k]

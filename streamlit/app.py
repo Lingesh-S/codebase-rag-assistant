@@ -33,7 +33,8 @@ CODE_LANGUAGES = {"js": "javascript", "ts": "typescript", "shell": "bash", "text
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
 
 # --- Header + GitHub Button ---
-st.markdown("""
+st.markdown(
+    """
     <style>
         .github-btn-fixed {
             position: absolute;
@@ -92,7 +93,9 @@ st.markdown("""
         <h1>🤖 Codebase RAG Assistant</h1>
         <p>Ask questions about your codebase using AI-powered document retrieval & understanding</p>
     </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # --- Cached resources (shared by all sessions) ---
@@ -196,18 +199,30 @@ with st.sidebar:
     elif provider != "none":
         model_name = st.text_input("Model", value=DEFAULT_MODELS[provider])
 
-    temperature = st.slider("Temperature", 0.0, 1.0, 0.2, disabled=provider in ("anthropic", "none"),
-                            help="Current Claude models choose their own sampling settings.")
+    temperature = st.slider(
+        "Temperature",
+        0.0,
+        1.0,
+        0.2,
+        disabled=provider in ("anthropic", "none"),
+        help="Current Claude models choose their own sampling settings.",
+    )
     max_tokens = st.slider("Max answer tokens", 256, 8192, 2048, step=256, disabled=provider in ("anthropic", "none"))
 
     st.markdown("---")
     st.header("🔎 Retrieval")
     top_k = st.slider("Chunks to retrieve", 3, 12, 6)
-    use_reranker = st.toggle("Cross-encoder reranking", value=False,
-                             help=f"Re-orders the top hybrid results with {DEFAULT_RERANK_MODEL}. "
-                                  "More precise on large codebases, but adds a few seconds per question on CPU.")
-    rewrite_followups = st.toggle("Rewrite follow-up questions", value=True,
-                                  help="Uses the LLM to turn follow-ups into standalone search queries.")
+    use_reranker = st.toggle(
+        "Cross-encoder reranking",
+        value=False,
+        help=f"Re-orders the top hybrid results with {DEFAULT_RERANK_MODEL}. "
+        "More precise on large codebases, but adds a few seconds per question on CPU.",
+    )
+    rewrite_followups = st.toggle(
+        "Rewrite follow-up questions",
+        value=True,
+        help="Uses the LLM to turn follow-ups into standalone search queries.",
+    )
 
     st.markdown("---")
     st.header("📂 Codebase Input")
@@ -243,7 +258,12 @@ with st.sidebar:
 
             settings = RAGSettings(persist_dir=persist_dir, top_k=top_k)
             with st.spinner("🔄 Loading, chunking & embedding documents..."):
-                rag = RAGPipeline(folder, settings, collection_name=collection, embedding=load_embedding_model(DEFAULT_EMBEDDING_MODEL))
+                rag = RAGPipeline(
+                    folder,
+                    settings,
+                    collection_name=collection,
+                    embedding=load_embedding_model(DEFAULT_EMBEDDING_MODEL),
+                )
                 stats = rag.build_knowledge_base()
             st.session_state.rag = rag
             st.session_state.index_info = (folder.name if persist_dir else "uploaded files", stats)
@@ -299,8 +319,9 @@ if query:
                 if provider != "none" and model_name:
                     llm = get_llm(provider, model_name, temperature=temperature, max_tokens=max_tokens)
                 with st.spinner("🔍 Searching the codebase..."):
-                    answer = rag.stream_answer(query, llm, history, rewrite_followups=rewrite_followups,
-                                               k=top_k, rerank=use_reranker)
+                    answer = rag.stream_answer(
+                        query, llm, history, rewrite_followups=rewrite_followups, k=top_k, rerank=use_reranker
+                    )
                 if answer.search_query != query:
                     st.caption(f"Searched for: _{answer.search_query}_")
                 if answer.stream is None:
@@ -315,4 +336,6 @@ if query:
                 st.markdown(content)
             render_sources(sources)
 
-    st.session_state.messages.append({"role": "assistant", "content": content, "sources": sources, "in_history": in_history})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": content, "sources": sources, "in_history": in_history}
+    )

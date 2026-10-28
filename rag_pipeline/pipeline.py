@@ -18,7 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 @dataclass
 class RAGSettings:
     # None keeps the index in memory only.
-    persist_dir: str | None = field(default_factory=lambda: os.getenv("RAG_PERSIST_DIR", str(PROJECT_ROOT / "chroma_db")))
+    persist_dir: str | None = field(
+        default_factory=lambda: os.getenv("RAG_PERSIST_DIR", str(PROJECT_ROOT / "chroma_db"))
+    )
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     rerank_model: str | None = DEFAULT_RERANK_MODEL  # loaded on first use; None disables reranking
     rerank_top_n: int = 10
@@ -41,7 +43,14 @@ class Answer:
 class RAGPipeline:
     """Index a codebase and answer questions about it with cited sources."""
 
-    def __init__(self, codebase_path, settings: RAGSettings | None = None, collection_name: str | None = None, embedding=None, reranker=None):
+    def __init__(
+        self,
+        codebase_path,
+        settings: RAGSettings | None = None,
+        collection_name: str | None = None,
+        embedding=None,
+        reranker=None,
+    ):
         self.codebase_path = Path(codebase_path).resolve()
         self.settings = settings or RAGSettings()
         if embedding is None:
