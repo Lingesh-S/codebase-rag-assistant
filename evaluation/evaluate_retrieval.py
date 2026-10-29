@@ -4,6 +4,7 @@
 #
 #   python -m evaluation.evaluate_retrieval
 #   python -m evaluation.evaluate_retrieval --embedding-model jinaai/jina-embeddings-v2-base-code
+#   python -m evaluation.evaluate_retrieval --store qdrant    # needs Qdrant running, or --qdrant-url :memory:
 
 import argparse
 import json
@@ -16,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from embeddings.embedder import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, get_embedding_model, get_reranker  # noqa: E402
-from rag_pipeline.pipeline import RAGPipeline, RAGSettings  # noqa: E402
+from rag_pipeline.pipeline import VECTOR_STORES, RAGPipeline, RAGSettings  # noqa: E402
 
 CONFIGS = [
     ("dense", "dense", False),
@@ -62,6 +63,8 @@ def main(argv=None):
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--rerank-model", default=DEFAULT_RERANK_MODEL)
     parser.add_argument("--chunk-size", type=int, default=RAGSettings.chunk_size)
+    parser.add_argument("--store", choices=VECTOR_STORES, default="chroma")
+    parser.add_argument("--qdrant-url", default=None, help="default: QDRANT_URL or http://127.0.0.1:6333")
     args = parser.parse_args(argv)
 
     cases = json.loads(Path(args.golden).read_text(encoding="utf-8"))
@@ -70,7 +73,9 @@ def main(argv=None):
         embedding_model=args.embedding_model,
         rerank_model=args.rerank_model,
         chunk_size=args.chunk_size,
+        vector_store=args.store,
     )
+    settings.qdrant_url = args.qdrant_url or settings.qdrant_url
     rag = RAGPipeline(
         args.codebase,
         settings,
@@ -78,8 +83,9 @@ def main(argv=None):
         embedding=get_embedding_model(args.embedding_model),
         reranker=get_reranker(args.rerank_model),
     )
+    rag.store.reset()  # a Qdrant collection outlives the run, so start from an empty one
     stats = rag.build_knowledge_base()
-    print(f"{len(cases)} questions | {stats.total_files} files, {stats.total_chunks} chunks")
+    print(f"{len(cases)} questions | {stats.total_files} files, {stats.total_chunks} chunks | store: {args.store}")
     print(f"embedding: {args.embedding_model} | reranker: {args.rerank_model}\n")
 
     print(f"{'config':<17}" + "".join(f"{'hit@' + str(c):>8}" for c in CUTOFFS) + f"{'MRR':>8}{'ms/query':>10}")
@@ -96,6 +102,8 @@ def main(argv=None):
     for name, misses in all_misses.items():
         for question in misses:
             print(f"  missed in top 10 ({name}): {question}")
+    if args.store == "qdrant":
+        rag.store.client.delete_collection(rag.store.collection_name)
 
 
 if __name__ == "__main__":
