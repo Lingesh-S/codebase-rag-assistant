@@ -17,9 +17,11 @@ from rag_pipeline.generator import (
 )
 from retriever.code_retriever import HybridRetriever
 from utils.chunker import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, chunk_documents
+from vectorstore.qdrant_store import QdrantStore
 from vectorstore.vector_store import CodeVectorStore, IndexStats, StoredChunk, collection_name_for
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+VECTOR_STORES = ("chroma", "qdrant")
 
 
 @dataclass
@@ -28,6 +30,9 @@ class RAGSettings:
     persist_dir: str | None = field(
         default_factory=lambda: os.getenv("RAG_PERSIST_DIR", str(PROJECT_ROOT / "chroma_db"))
     )
+    # Chroma needs no server, so it suits Streamlit Cloud and offline use; Qdrant is shared by the API and worker.
+    vector_store: str = field(default_factory=lambda: os.getenv("RAG_VECTOR_STORE", "chroma"))
+    qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", "http://127.0.0.1:6333"))
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     rerank_model: str | None = DEFAULT_RERANK_MODEL  # loaded on first use; None disables reranking
     rerank_top_n: int = 10
@@ -64,6 +69,14 @@ class Token:
     text: str
 
 
+def open_store(settings: RAGSettings, embedding, collection_name: str) -> CodeVectorStore | QdrantStore:
+    if settings.vector_store == "chroma":
+        return CodeVectorStore(embedding, collection_name, settings.persist_dir)
+    if settings.vector_store == "qdrant":
+        return QdrantStore(embedding, collection_name, settings.qdrant_url)
+    raise ValueError(f"RAG_VECTOR_STORE must be one of {VECTOR_STORES}, not {settings.vector_store!r}")
+
+
 class RAGPipeline:
     """Index a codebase and answer questions about it with cited sources."""
 
@@ -79,10 +92,8 @@ class RAGPipeline:
         self.settings = settings or RAGSettings()
         if embedding is None:
             embedding = get_embedding_model(self.settings.embedding_model)
-        self.store = CodeVectorStore(
-            embedding,
-            collection_name or collection_name_for(str(self.codebase_path)),
-            self.settings.persist_dir,
+        self.store = open_store(
+            self.settings, embedding, collection_name or collection_name_for(str(self.codebase_path))
         )
         self.retriever = HybridRetriever(
             self.store, reranker, candidate_k=self.settings.candidate_k, rerank_top_n=self.settings.rerank_top_n

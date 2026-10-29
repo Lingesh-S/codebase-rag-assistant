@@ -119,6 +119,17 @@ def fake_embeddings() -> FakeEmbeddings:
 
 
 @pytest.fixture
+def qdrant_memory():
+    """The process-wide in-memory Qdrant that ":memory:" stores share, emptied after each test."""
+    from vectorstore.qdrant_store import qdrant_client
+
+    client = qdrant_client(":memory:")
+    yield client
+    for collection in client.get_collections().collections:
+        client.delete_collection(collection.name)
+
+
+@pytest.fixture
 def make_rag(tmp_path, fake_embeddings):
     def factory(root: Path, reranker=None, **settings) -> RAGPipeline:
         settings.setdefault("persist_dir", str(tmp_path / "chroma"))
