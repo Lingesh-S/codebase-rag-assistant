@@ -1,0 +1,28 @@
+# Services for local development: Qdrant (shared vector index) and Redis (index job queue).
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Both listen on 127.0.0.1 only. Then run the API and the worker with
+# RAG_VECTOR_STORE=qdrant and REDIS_URL=redis://127.0.0.1:6379 (see README).
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10.3-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  redis_data:
