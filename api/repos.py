@@ -2,10 +2,11 @@
 
 import os
 import threading
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from api.jobs import Job, JobRunner
+from api.jobs import Job, JobRunner, QueueJobRunner
 from embeddings.embedder import get_embedding_model
 from loaders.github import RepoRef, clone_or_update, parse_github_url
 from rag_pipeline.pipeline import RAGPipeline, RAGSettings
@@ -39,10 +40,37 @@ class Repo:
         }
 
 
+def build_index(
+    spec: dict,
+    settings: RAGSettings,
+    embedding=None,
+    repo_cache: str | Path = ".repos",
+    report: Callable[[str, int, int], None] | None = None,
+) -> tuple[RAGPipeline, IndexStats]:
+    """Clones (for GitHub repos) and indexes the codebase a job spec describes; used by both job runners."""
+    report = report or (lambda stage, done, total: None)
+    settings = replace(settings, **spec.get("settings", {}))
+    if spec["github"]:
+        ref = RepoRef(**spec["github"])
+        report(f"Cloning {spec['name']}", 0, 0)
+        folder = clone_or_update(ref, repo_cache)
+    else:
+        folder = Path(spec["folder"])
+    embedding = embedding or get_embedding_model(settings.embedding_model)
+    rag = RAGPipeline(folder, settings, collection_name=spec["repo_id"], embedding=embedding)
+    return rag, rag.build_knowledge_base(progress=report)
+
+
 class RepoRegistry:
     """The codebases this API knows about, and the index jobs that build them."""
 
-    def __init__(self, settings: RAGSettings, jobs: JobRunner, embedding=None, repo_cache: str | Path = ".repos"):
+    def __init__(
+        self,
+        settings: RAGSettings,
+        jobs: JobRunner | QueueJobRunner,
+        embedding=None,
+        repo_cache: str | Path = ".repos",
+    ):
         self.settings = settings
         self.jobs = jobs
         self.embedding = embedding
@@ -64,10 +92,13 @@ class RepoRegistry:
         return self._add(Repo(collection_name_for(f"github:{ref.name}"), ref.name, "github", url, github=ref))
 
     def get(self, repo_id: str) -> Repo | None:
-        return self._repos.get(repo_id)
+        repo = self._repos.get(repo_id)
+        if repo and self.jobs.remote:
+            self._follow(repo)
+        return repo
 
     def all(self) -> list[Repo]:
-        return list(self._repos.values())
+        return [self.get(repo_id) for repo_id in list(self._repos)]
 
     def index(self, repo: Repo) -> Job:
         """Starts an index job for the repo, or returns the one already running."""
@@ -75,8 +106,37 @@ class RepoRegistry:
             if repo.job and repo.job.active:
                 return repo.job
             repo.status = "indexing"
-            repo.job = self.jobs.submit(repo.id, lambda job: self._build(repo, job))
+            if self.jobs.remote:
+                repo.job = self.jobs.submit(repo.id, self.job_spec(repo))
+            else:
+                repo.job = self.jobs.submit(repo.id, lambda job: self._build(repo, job))
             return repo.job
+
+    def job_spec(self, repo: Repo) -> dict:
+        """Everything the worker process needs to index the repo; it must survive a trip through JSON."""
+        keys = ("embedding_model", "chunk_size", "chunk_overlap")
+        return {
+            "repo_id": repo.id,
+            "name": repo.name,
+            "kind": repo.kind,
+            "folder": str(repo.folder) if repo.folder else None,
+            "github": asdict(repo.github) if repo.github else None,
+            "settings": {key: getattr(self.settings, key) for key in keys},
+        }
+
+    def _follow(self, repo: Repo) -> None:
+        """Picks up the worker's progress, and opens the shared index once its job is done."""
+        with self._lock:
+            if repo.job is None or repo.status != "indexing":
+                return
+            repo.job = self.jobs.get(repo.job.id) or repo.job
+            if repo.job.status == "failed":
+                repo.status = "failed"
+            elif repo.job.status == "done":
+                repo.folder = Path(repo.job.folder) if repo.job.folder else repo.folder
+                embedding = self.embedding or get_embedding_model(self.settings.embedding_model)
+                repo.pipeline = RAGPipeline(repo.folder, self.settings, collection_name=repo.id, embedding=embedding)
+                repo.stats, repo.status = IndexStats(**repo.job.stats), "ready"
 
     def _add(self, repo: Repo) -> tuple[Repo, bool]:
         with self._lock:
@@ -88,14 +148,10 @@ class RepoRegistry:
     def _build(self, repo: Repo, job: Job) -> dict:
         # Runs on a worker thread.
         try:
-            if repo.github:
-                job.report(f"Cloning {repo.name}", 0, 0)
-                repo.folder = clone_or_update(repo.github, self.repo_cache)
-            embedding = self.embedding or get_embedding_model(self.settings.embedding_model)
-            rag = RAGPipeline(repo.folder, self.settings, collection_name=repo.id, embedding=embedding)
-            stats = rag.build_knowledge_base(progress=job.report)
+            rag, stats = build_index(self.job_spec(repo), self.settings, self.embedding, self.repo_cache, job.report)
         except Exception:
             repo.status = "failed"
             raise
+        repo.folder, job.folder = rag.codebase_path, str(rag.codebase_path)
         repo.pipeline, repo.stats, repo.status = rag, stats, "ready"
         return asdict(stats)

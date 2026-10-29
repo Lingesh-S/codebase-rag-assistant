@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 
-from api.jobs import JobRunner
+from api.jobs import JobRunner, QueueJobRunner, RedisJobStore
 from api.repos import Repo, RepoRegistry
 from api.schemas import ChatIn, RepoIn, SearchIn
 from embeddings.embedder import get_embedding_model
@@ -80,6 +80,19 @@ def sse_answer(events: Iterator[Step | Sources | Token], llm: LLM | None) -> Ite
     yield sse_message("done", done)
 
 
+def job_runner(settings: RAGSettings, max_workers: int) -> JobRunner | QueueJobRunner:
+    """The separate worker process when REDIS_URL is set, else threads inside this process."""
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return JobRunner(max_workers)
+    import redis
+
+    from api.worker import ArqQueue, require_shared_store
+
+    require_shared_store(settings)
+    return QueueJobRunner(RedisJobStore(redis.Redis.from_url(redis_url)), ArqQueue(redis_url))
+
+
 def create_app(
     settings: RAGSettings | None = None,
     embedding=None,
@@ -87,9 +100,11 @@ def create_app(
     repo_cache: str | Path = REPO_CACHE,
     max_workers: int = 2,
     warm_up: bool = WARM_UP,
+    jobs: JobRunner | QueueJobRunner | None = None,
 ) -> FastAPI:
-    jobs = JobRunner(max_workers)
-    repos = RepoRegistry(settings or RAGSettings(), jobs, embedding, repo_cache)
+    settings = settings or RAGSettings()
+    jobs = jobs or job_runner(settings, max_workers)
+    repos = RepoRegistry(settings, jobs, embedding, repo_cache)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
