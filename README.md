@@ -20,7 +20,9 @@ Explore your own project files with natural language queries — understand, deb
 ## 🔧 Tech Stack
 - **Streamlit** — chat UI with streamed answers and expandable sources
 - **FastAPI** — HTTP API with background index jobs and answers streamed as server-sent events
-- **ChromaDB** — persistent vector store (cosine HNSW)
+- **ChromaDB** — persistent vector store (cosine HNSW), the default with no server needed
+- **Qdrant** — optional shared vector store with hybrid dense + keyword search in one query
+- **arq + Redis** — optional index worker, so large repositories index outside the API process
 - **fastembed** — ONNX embedding and reranking models on CPU, no PyTorch needed
 - **rank-bm25** — keyword search with a code-aware tokenizer
 - **LangChain** — document model and language-aware text splitters
@@ -63,6 +65,7 @@ Explore your own project files with natural language queries — understand, deb
 codebase-rag-assistant/
 ├── streamlit/app.py         # Streamlit chat UI
 ├── api/                     # FastAPI service: repos, index jobs, search, streamed chat
+│   └── worker.py            # arq index worker (used when REDIS_URL is set)
 ├── rag_pipeline/
 │   ├── pipeline.py          # RAGPipeline: index, retrieve, answer
 │   ├── generator.py         # prompts + Hugging Face / Anthropic / Ollama clients
@@ -71,10 +74,12 @@ codebase-rag-assistant/
 ├── utils/chunker.py         # AST / language-aware chunking with line numbers
 ├── embeddings/embedder.py   # fastembed embedding model + cross-encoder reranker
 ├── vectorstore/vector_store.py  # Chroma collection with incremental sync
+├── vectorstore/qdrant_store.py  # Qdrant collection: dense + sparse vectors, hybrid query
 ├── retriever/code_retriever.py  # BM25 + dense hybrid retrieval, RRF, reranking
 ├── evaluation/              # labelled questions + retrieval benchmark
 ├── tests/                   # pytest suite
 ├── sample_codebase/         # demo project used by the app, tests and evaluation
+├── docker-compose.dev.yml   # Qdrant and Redis for local development
 ├── requirements.txt
 └── requirements-dev.txt
 ```
@@ -152,6 +157,25 @@ python -m api            # http://127.0.0.1:8000, interactive docs at /docs
 
 The API, the CLI and the web app give the same folder or GitHub repository the same index, so an index built in one is reused by the others. Registered repositories live in memory, so register them again after a restart; their indexes stay on disk.
 
+**Index worker (Qdrant + Redis)**
+
+By default index jobs run on threads inside the API and the index is a local Chroma folder. For large repositories, run indexing in a separate worker process instead. Chroma cannot take writes from two processes, so this mode uses Qdrant:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d   # Qdrant on 127.0.0.1:6333, Redis on 127.0.0.1:6379
+```
+
+Then set these in `.env` (or the shell) and start both processes:
+
+```bash
+# RAG_VECTOR_STORE=qdrant
+# REDIS_URL=redis://127.0.0.1:6379
+python -m api.worker     # or: arq api.worker.WorkerSettings
+python -m api
+```
+
+The API queues each index job in Redis and reads its progress back from there, so `GET /jobs/{job_id}` works as before. Both processes refuse to start in worker mode with `RAG_VECTOR_STORE=chroma`. On this laptop (RTX 4050) the worker indexed `chromadb`'s 2,987 chunks in 27 s while `/health` answered in 6.5 ms (median).
+
 ---
 
 ## ⚙️ Configuration
@@ -161,7 +185,10 @@ The API, the CLI and the web app give the same folder or GitHub repository the s
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Any fastembed text model, e.g. `jinaai/jina-embeddings-v2-base-code` for large codebases |
 | `RAG_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Any fastembed cross-encoder |
 | `RAG_EMBEDDING_DEVICE` | `auto` | `auto` uses an NVIDIA GPU when `onnxruntime-gpu` is installed; `cpu` forces the CPU |
-| `RAG_PERSIST_DIR` | `chroma_db` | Where the vector index is stored |
+| `RAG_PERSIST_DIR` | `chroma_db` | Where the Chroma index is stored |
+| `RAG_VECTOR_STORE` | `chroma` | `chroma` (local folder, no server) or `qdrant` (shared server, hybrid search inside Qdrant) |
+| `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant server used when `RAG_VECTOR_STORE=qdrant` |
+| `REDIS_URL` | unset | Set it to send API index jobs to the worker (`python -m api.worker`); needs `RAG_VECTOR_STORE=qdrant` |
 | `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input (web app and API) to one directory tree. Set this on public deployments. |
 | `RAG_REPO_CACHE` | `.repos` | Where the API clones GitHub repositories |
 | `RAG_WARM_UP` | `1` | `0` skips loading the embedding model and the Ollama model at startup |
@@ -175,6 +202,7 @@ The API, the CLI and the web app give the same folder or GitHub repository the s
 
 ```bash
 python -m evaluation.evaluate_retrieval
+python -m evaluation.evaluate_retrieval --store qdrant   # same benchmark on Qdrant (--qdrant-url :memory: needs no server)
 ```
 
 Results on the sample project (hit@k = an expected file is in the top k; MRR = mean reciprocal rank):
@@ -186,6 +214,7 @@ Results on the sample project (hit@k = an expected file is in the top k; MRR = m
 | Structure-aware chunks + headers, dense only | 0.90 | 1.00 | 0.950 |
 | **Structure-aware chunks + hybrid BM25/dense (default)** | **0.95** | **1.00** | **0.975** |
 | Default + cross-encoder reranking | 0.95 | 1.00 | 0.975 |
+| Qdrant hybrid (dense + sparse fused in one query) | 1.00 | 1.00 | 1.000 |
 
 Reranking adds no gain on this small, already well-ranked set and costs a few seconds per question on CPU, so it is opt-in (sidebar toggle or `--rerank`). With the weaker `all-MiniLM-L6-v2` embeddings it lifts hybrid MRR from 0.938 to 0.975, so it is worth enabling for large codebases or lighter embedding models. Extend `golden_set.json` with questions about your own code to tune these choices.
 
@@ -196,7 +225,7 @@ Reranking adds no gain on this small, already well-ranked set and costs a few se
 ```bash
 pip install -r requirements-dev.txt
 pytest              # fast offline suite (fake embeddings, fake LLMs)
-pytest -m slow      # end-to-end app test with the real models
+pytest -m slow      # end-to-end tests with the real models, and the worker on Redis + Qdrant when they run
 ruff check .        # lint (rules in ruff.toml)
 ruff format .       # format to the project style (120-character lines)
 ```
