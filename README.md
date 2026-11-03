@@ -54,6 +54,7 @@ Explore your own project files with natural language queries — understand, deb
 | Chunking | Python is parsed with `ast` so each function, class or method stays whole; large classes are split per method (`Class.method`). Other languages use LangChain's language-aware separators. Each chunk keeps its line range and gets a `File / Symbol` header that is embedded with it. |
 | Indexing | Chunk IDs are deterministic and each file's SHA-256 is stored, so rebuilding only re-embeds changed files and removes deleted ones. Changing the embedding model rebuilds the collection automatically. |
 | Retrieval | Dense search and BM25 (with camelCase / snake_case splitting and light stemming) are fused with Reciprocal Rank Fusion. An optional cross-encoder reorders the top 10. |
+| Agent | In the API's default mode the model calls tools to search, read, list and grep the indexed files (native tool calling on all three providers), then answers citing the passages it opened. |
 | Generation | Retrieved code is wrapped in numbered `<source>` tags, the model is told to treat it as data, cite `[n]`, and say when the context is insufficient. Follow-up questions are rewritten into standalone queries before retrieval. |
 
 ---
@@ -68,6 +69,7 @@ codebase-rag-assistant/
 │   └── worker.py            # arq index worker (used when REDIS_URL is set)
 ├── rag_pipeline/
 │   ├── pipeline.py          # RAGPipeline: index, retrieve, answer
+│   ├── agent.py             # tool-calling agent: search_code, read_file, list_dir, grep
 │   ├── generator.py         # prompts + Hugging Face / Anthropic / Ollama clients
 │   └── main.py              # terminal CLI
 ├── loaders/code_loader.py   # file discovery, filtering, notebook + zip support
@@ -76,7 +78,7 @@ codebase-rag-assistant/
 ├── vectorstore/vector_store.py  # Chroma collection with incremental sync
 ├── vectorstore/qdrant_store.py  # Qdrant collection: dense + sparse vectors, hybrid query
 ├── retriever/code_retriever.py  # BM25 + dense hybrid retrieval, RRF, reranking
-├── evaluation/              # labelled questions + retrieval benchmark
+├── evaluation/              # labelled questions, retrieval benchmark, agent vs one-shot answer eval
 ├── tests/                   # pytest suite
 ├── sample_codebase/         # demo project used by the app, tests and evaluation
 ├── docker-compose.dev.yml   # Qdrant and Redis for local development
@@ -153,7 +155,9 @@ python -m api            # http://127.0.0.1:8000, interactive docs at /docs
 | `POST /repos/{id}/index` | Starts a background index job (or returns the one already running) |
 | `GET /jobs/{job_id}` | Job status, stage and progress (`done` of `total`) |
 | `POST /repos/{id}/search` | `{"query": "...", "k": 6}`: ranked passages with file and line numbers |
-| `POST /repos/{id}/chat` | `{"question": "...", "history": [...]}`: streams `step`, `sources` and `token` events, then `done` or `error` |
+| `POST /repos/{id}/chat` | `{"question": "...", "history": [...], "mode": "agent"}`: streams `step`, `sources` and `token` events, then `done` or `error` |
+
+By default `/chat` runs the agent: the model works through the codebase with four tools (`search_code`, `read_file`, `list_dir` and `grep`, all limited to the indexed files), so it can follow a call from one file into the next. Each tool call shows up as a step (`Searching: password hashing`, `Reading api/app.py lines 40-80`), the sources are the passages it actually opened and cited, and the answer's `[n]` citations point at them. It stops after 8 tool calls. Models that cannot call tools fall back to a single retrieval, and `"mode": "oneshot"` asks for that directly.
 
 The API, the CLI and the web app give the same folder or GitHub repository the same index, so an index built in one is reused by the others. Registered repositories live in memory, so register them again after a restart; their indexes stay on disk.
 
@@ -217,6 +221,20 @@ Results on the sample project (hit@k = an expected file is in the top k; MRR = m
 | Qdrant hybrid (dense + sparse fused in one query) | 1.00 | 1.00 | 1.000 |
 
 Reranking adds no gain on this small, already well-ranked set and costs a few seconds per question on CPU, so it is opt-in (sidebar toggle or `--rerank`). With the weaker `all-MiniLM-L6-v2` embeddings it lifts hybrid MRR from 0.938 to 0.975, so it is worth enabling for large codebases or lighter embedding models. Extend `golden_set.json` with questions about your own code to tune these choices.
+
+**Answers: agent vs one-shot.** `evaluation/agent_questions.json` holds 10 cross-file questions about this repository and `sample_codebase`, each with the files a good answer must use. The script asks every question in both modes and scores the citations: file recall (how many of those files the answer cites) and citation validity (every `[n]` exists and points at a relevant file).
+
+```bash
+python evaluation/evaluate_answers.py                       # Ollama, OLLAMA_MODEL or the first pulled model
+python evaluation/evaluate_answers.py --provider anthropic --modes agent --out results.json
+```
+
+With `qwen3.5:4b` on Ollama (RTX 4050 laptop):
+
+| Mode | File recall | Valid citations | Seconds per question |
+|---|---|---|---|
+| One-shot retrieval | 0.62 | 0.63 | 17.4 |
+| **Agent (default)** | **0.90** | **0.82** | **13.3** |
 
 ---
 
