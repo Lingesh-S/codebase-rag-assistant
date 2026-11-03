@@ -17,6 +17,7 @@ from api.jobs import JobRunner, QueueJobRunner, RedisJobStore
 from api.repos import Repo, RepoRegistry
 from api.schemas import ChatIn, RepoIn, SearchIn
 from embeddings.embedder import get_embedding_model
+from rag_pipeline.agent import agent_events
 from rag_pipeline.generator import LLM, available_providers, get_llm
 from rag_pipeline.pipeline import PROJECT_ROOT, RAGPipeline, RAGSettings, Sources, Step, Token
 from utils.chunker import chunk_body
@@ -178,7 +179,10 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         history = [message.model_dump() for message in body.history]
-        events = rag.answer_events(body.question, llm, history, body.rewrite_followups, body.k, body.rerank)
+        if body.mode == "agent" and llm is not None:
+            events = agent_events(rag, body.question, llm, history, body.k, body.rerank)
+        else:
+            events = rag.answer_events(body.question, llm, history, body.rewrite_followups, body.k, body.rerank)
         return EventSourceResponse(sse_answer(events, llm))
 
     return app

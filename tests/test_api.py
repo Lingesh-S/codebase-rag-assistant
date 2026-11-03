@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 from loaders.github import parse_github_url
+from rag_pipeline.generator import ToolCall, ToolTurn
 from rag_pipeline.pipeline import RAGSettings
-from tests.conftest import FakeEmbeddings, FakeLLM
+from tests.conftest import FakeEmbeddings, FakeLLM, ScriptedLLM
 from vectorstore.vector_store import collection_name_for
 
 
@@ -298,3 +299,48 @@ def test_models_warm_up_in_the_background_when_the_server_starts(monkeypatch, tm
         app.state.warm_thread.join(5)
 
     assert len(warmed) == 1
+
+
+def tool_llm():
+    return ScriptedLLM(
+        [
+            ToolTurn("", [ToolCall("c1", "read_file", {"path": "app/auth.py", "start_line": "5"})]),
+            ToolTurn("hash_password uses PBKDF2 [1].", []),
+        ]
+    )
+
+
+def test_chat_runs_the_agent_by_default(make_client, codebase):
+    llm = tool_llm()
+    with make_client(llm=llm) as client:
+        repo_id = indexed(client, codebase)
+
+        response = client.post(f"/repos/{repo_id}/chat", json={"question": "How are passwords hashed?"})
+
+    events = sse_events(response.text)
+    assert [name for name, _ in events[:2]] == ["step", "sources"]
+    assert events[0][1] == {"label": "Reading app/auth.py lines 5-7"}
+    source = events[1][1]["sources"][0]
+    assert (source["n"], source["source"], source["start_line"], source["end_line"]) == (1, "app/auth.py", 5, 7)
+    assert source["code"].startswith("def hash_password")
+    assert events[-1][0] == "done"
+    assert events[-1][1]["answer"] == "hash_password uses PBKDF2 [1]."
+
+
+def test_chat_oneshot_mode_skips_the_tools(make_client, codebase):
+    llm = tool_llm()
+    with make_client(llm=llm) as client:
+        repo_id = indexed(client, codebase)
+
+        response = client.post(
+            f"/repos/{repo_id}/chat", json={"question": "How are passwords hashed?", "mode": "oneshot"}
+        )
+
+    assert sse_events(response.text)[0] == ("step", {"label": "Searching the codebase"})
+    assert llm.tool_requests == []
+
+
+def test_chat_rejects_unknown_modes(client, codebase):
+    repo_id = indexed(client, codebase)
+
+    assert client.post(f"/repos/{repo_id}/chat", json={"question": "x", "mode": "magic"}).status_code == 422

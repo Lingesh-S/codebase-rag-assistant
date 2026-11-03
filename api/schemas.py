@@ -31,6 +31,9 @@ class ChatIn(BaseModel):
     k: int = Field(6, ge=1, le=20, description="Passages to retrieve")
     rerank: bool = False
     rewrite_followups: bool = True
+    mode: Literal["agent", "oneshot"] = Field(
+        "agent", description="agent lets the model search and read files with tools; oneshot retrieves once"
+    )
 
 
 class SearchIn(BaseModel):
