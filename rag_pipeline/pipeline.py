@@ -115,10 +115,14 @@ class RAGPipeline:
         self.retriever.refresh()
         return stats
 
-    def retrieve(self, query: str, k: int | None = None, rerank: bool = False) -> list[StoredChunk]:
+    def retrieve(
+        self, query: str, k: int | None = None, rerank: bool = False, path_prefix: str | None = None
+    ) -> list[StoredChunk]:
         if rerank and self.retriever.reranker is None and self.settings.rerank_model:
             self.retriever.reranker = get_reranker(self.settings.rerank_model)
-        return self.retriever.retrieve(query, k or self.settings.top_k, self.settings.retrieval_mode, rerank)
+        return self.retriever.retrieve(
+            query, k or self.settings.top_k, self.settings.retrieval_mode, rerank, path_prefix=path_prefix
+        )
 
     def answer_events(
         self,

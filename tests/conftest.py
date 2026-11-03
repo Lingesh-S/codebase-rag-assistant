@@ -48,6 +48,22 @@ class FakeLLM:
             yield self.reply[i : i + 4]
 
 
+class ScriptedLLM(FakeLLM):
+    """A tool-calling model that plays back fixed turns and records every request it gets."""
+
+    def __init__(self, turns, reply: str = "It hashes passwords with PBKDF2 [1]."):
+        super().__init__(reply)
+        self.turns = list(turns)
+        self.tool_requests: list[dict] = []
+
+    def call_tools(self, system, messages, tools, max_tokens=None):
+        self.tool_requests.append({"system": system, "messages": list(messages), "tools": [t["name"] for t in tools]})
+        turn = self.turns.pop(0) if len(self.turns) > 1 else self.turns[0]  # the last turn repeats
+        if isinstance(turn, Exception):
+            raise turn
+        return turn
+
+
 def write(root: Path, relative: str, content: str | bytes) -> Path:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
