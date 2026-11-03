@@ -1,0 +1,62 @@
+[
+  {
+    "repo": ".",
+    "question": "How does a chat request to the API turn into a stream of server-sent events, from the HTTP endpoint down to the retrieval pipeline?",
+    "expected_files": ["api/app.py", "rag_pipeline/pipeline.py"],
+    "related_files": ["api/schemas.py", "rag_pipeline/agent.py", "rag_pipeline/generator.py", "retriever/code_retriever.py"]
+  },
+  {
+    "repo": ".",
+    "question": "When REDIS_URL is set, how does an index job get from the API to the separate worker process, and how does its progress come back to the API?",
+    "expected_files": ["api/app.py", "api/jobs.py", "api/worker.py"],
+    "related_files": ["api/repos.py", "rag_pipeline/pipeline.py"]
+  },
+  {
+    "repo": ".",
+    "question": "How does the Qdrant store build the sparse keyword vector for a chunk, and which tokenizer does it share with the BM25 retriever?",
+    "expected_files": ["vectorstore/qdrant_store.py", "retriever/code_retriever.py"],
+    "related_files": ["rag_pipeline/pipeline.py"]
+  },
+  {
+    "repo": ".",
+    "question": "When a repository is indexed a second time, how does the pipeline decide which files to embed again?",
+    "expected_files": ["rag_pipeline/pipeline.py", "vectorstore/vector_store.py"],
+    "related_files": ["vectorstore/qdrant_store.py", "utils/chunker.py", "loaders/code_loader.py"]
+  },
+  {
+    "repo": ".",
+    "question": "How are follow-up questions rewritten into standalone search queries, and where in the answer flow does that happen?",
+    "expected_files": ["rag_pipeline/generator.py", "rag_pipeline/pipeline.py"],
+    "related_files": ["api/app.py", "api/schemas.py"]
+  },
+  {
+    "repo": ".",
+    "question": "What happens between POST /repos with a github_url and the cloned repository's files being loaded for indexing?",
+    "expected_files": ["api/repos.py", "loaders/github.py"],
+    "related_files": ["api/app.py", "api/schemas.py", "api/jobs.py", "api/worker.py", "loaders/code_loader.py", "rag_pipeline/pipeline.py"]
+  },
+  {
+    "repo": "sample_codebase",
+    "question": "What happens, from the command line down to the file on disk, when I run `inventory remove SKU 5`?",
+    "expected_files": ["inventory/cli.py", "inventory/service.py", "inventory/storage.py"],
+    "related_files": ["inventory/models.py", "config.json"]
+  },
+  {
+    "repo": "sample_codebase",
+    "question": "How is the total inventory value computed, and where do the prices it uses come from?",
+    "expected_files": ["inventory/service.py", "inventory/models.py"],
+    "related_files": ["inventory/storage.py", "inventory/cli.py"]
+  },
+  {
+    "repo": "sample_codebase",
+    "question": "Which products appear in the low stock report, and where is the threshold that decides it?",
+    "expected_files": ["inventory/service.py", "inventory/models.py"],
+    "related_files": ["inventory/cli.py", "inventory/storage.py"]
+  },
+  {
+    "repo": "sample_codebase",
+    "question": "Where does the command line tool get its data file path and currency from, and which code uses each of them?",
+    "expected_files": ["inventory/cli.py", "config.json"],
+    "related_files": ["inventory/storage.py", "inventory/service.py"]
+  }
+]
