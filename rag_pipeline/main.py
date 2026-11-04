@@ -3,6 +3,7 @@
 # Usage (from the project root):
 #   python -m rag_pipeline.main --path sample_codebase
 #   python -m rag_pipeline.main --path ../my-project --provider ollama -q "Where is auth handled?"
+#   python -m rag_pipeline.main --api http://127.0.0.1:8000 --path sample_codebase   # index and ask through the API
 
 import argparse
 import sys
@@ -20,6 +21,7 @@ from rag_pipeline.generator import PROVIDERS, available_providers, get_llm  # no
 from rag_pipeline.pipeline import RAGPipeline, RAGSettings  # noqa: E402
 from retriever.code_retriever import RETRIEVAL_MODES  # noqa: E402
 from utils.chunker import chunk_body  # noqa: E402
+from vectorstore.vector_store import IndexStats  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -31,12 +33,18 @@ def parse_args(argv=None):
     parser.add_argument("--model", help="model name for the chosen provider")
     parser.add_argument("-q", "--question", help="ask one question and exit")
     parser.add_argument("-k", type=int, default=6, help="number of chunks to retrieve (default: 6)")
-    parser.add_argument(
-        "--mode", choices=RETRIEVAL_MODES, default="hybrid", help="retrieval strategy (default: hybrid)"
-    )
+    parser.add_argument("--mode", choices=RETRIEVAL_MODES, help="retrieval strategy (default: hybrid)")
     parser.add_argument("--rerank", action="store_true", help="reorder results with a cross-encoder (slower on CPU)")
     parser.add_argument("--rebuild", action="store_true", help="drop the existing index before indexing")
-    return parser.parse_args(argv)
+    parser.add_argument("--api", metavar="URL", help="index and ask through a running API instead of in this process")
+    parser.add_argument("--oneshot", action="store_true", help="with --api: retrieve once instead of the agent's tools")
+    args = parser.parse_args(argv)
+    if args.api and (args.rebuild or args.mode):
+        parser.error("--rebuild and --mode change the local index, so they cannot be used with --api")
+    if args.oneshot and not args.api:
+        parser.error("--oneshot needs --api (the local CLI always retrieves once)")
+    args.mode = args.mode or "hybrid"
+    return args
 
 
 def print_sources(sources, with_code=False):
@@ -49,11 +57,8 @@ def print_sources(sources, with_code=False):
             print("      " + "\n      ".join(code.splitlines()[:12]))
 
 
-def main(argv=None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    args = parse_args(argv)
-
+def open_local(args):
+    """Indexes the folder in this process; returns the answer function and a label for error messages."""
     settings = RAGSettings(top_k=args.k, retrieval_mode=args.mode)
 
     print(f"Indexing {Path(args.path).resolve()} ...")
@@ -61,21 +66,72 @@ def main(argv=None) -> int:
     if args.rebuild:
         rag.store.reset()
     stats = rag.build_knowledge_base()
-    print(
-        f"Index ready: {stats.total_files} files, {stats.total_chunks} chunks "
-        f"(new {stats.files_added}, changed {stats.files_updated}, "
-        f"removed {stats.files_removed}, unchanged {stats.files_unchanged})"
-    )
+    print_stats(stats)
     print(f"Embeddings: {rag.store.embedding_model} on {getattr(rag.store.embedding, 'device', 'cpu').upper()}")
 
     provider = args.provider or next(iter(available_providers()), "none")
     llm = None if provider == "none" else get_llm(provider, args.model)
     print(f"LLM: {provider} / {llm.model}" if llm else "LLM: none (retrieval-only mode, showing matching code)")
+    return lambda question, history: rag.stream_answer(question, llm, history, rerank=args.rerank), provider
+
+
+def connect_api(args):
+    """Registers and indexes the folder through the API; the models run in the API's process."""
+    from api.client import connect
+
+    api = connect(args.api)
+    print(f"API: {args.api}")
+    folder = Path(args.path).resolve()
+    print(f"Indexing {folder} ...")
+    repo = api.add_repo(path=str(folder))
+    job = api.wait_for_job(api.index(repo["id"])["id"])
+    if job["status"] != "done":
+        raise RuntimeError(f"indexing failed: {job['error']}")
+    print_stats(IndexStats(**job["stats"]))
+    model = f" / {args.model}" if args.model else ""
+    print(f"LLM: {args.provider}{model}" if args.provider else "LLM: the API's default provider")
+
+    def get_answer(question, history):
+        return api.ask(
+            repo["id"],
+            question,
+            history,
+            provider=args.provider,
+            model=args.model,
+            k=args.k,
+            rerank=args.rerank,
+            mode="oneshot" if args.oneshot else "agent",
+        )
+
+    return get_answer, "API"
+
+
+def print_stats(stats: IndexStats) -> None:
+    print(
+        f"Index ready: {stats.total_files} files, {stats.total_chunks} chunks "
+        f"(new {stats.files_added}, changed {stats.files_updated}, "
+        f"removed {stats.files_removed}, unchanged {stats.files_unchanged})"
+    )
+
+
+def main(argv=None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    args = parse_args(argv)
+
+    if args.api:
+        try:
+            get_answer, label = connect_api(args)
+        except Exception as exc:
+            print(f"The API request failed: {exc}", file=sys.stderr)
+            return 1
+    else:
+        get_answer, label = open_local(args)
 
     history: list[dict] = []
 
     def ask(question: str) -> None:
-        answer = rag.stream_answer(question, llm, history, rerank=args.rerank)
+        answer = get_answer(question, history)
         if answer.search_query != question:
             print(f"(searching for: {answer.search_query})")
         if answer.stream is None:
@@ -96,7 +152,7 @@ def main(argv=None) -> int:
             ask(question)
             return True
         except Exception as exc:  # provider/network errors should not kill the session
-            print(f"\nThe {provider} request failed: {exc}", file=sys.stderr)
+            print(f"\nThe {label} request failed: {exc}", file=sys.stderr)
             return False
 
     if args.question:
