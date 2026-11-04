@@ -155,3 +155,35 @@ def make_rag(tmp_path, fake_embeddings):
         )
 
     return factory
+
+
+@pytest.fixture
+def make_api_client(tmp_path, fake_embeddings, monkeypatch):
+    """
+    A RagClient talking to an in-process API with fake models; api.client.connect returns the same client,
+    so the CLI's --api mode and the web app's RAG_API_URL mode reach this API too.
+    """
+    from fastapi.testclient import TestClient
+
+    from api import client as client_module
+    from api.app import create_app
+
+    opened = []
+
+    def factory(llm=None):
+        app = create_app(
+            RAGSettings(persist_dir=str(tmp_path / "api-chroma"), rerank_model=None),
+            embedding=fake_embeddings,
+            llm_factory=lambda provider, model: None if provider in (None, "none") else (llm or FakeLLM()),
+            repo_cache=tmp_path / "repos",
+            warm_up=False,
+        )
+        http = TestClient(app).__enter__()
+        opened.append(http)
+        api = client_module.RagClient(http=http, poll_seconds=0.02)
+        monkeypatch.setattr(client_module, "connect", lambda base_url: api)
+        return api
+
+    yield factory
+    for http in opened:
+        http.__exit__(None, None, None)

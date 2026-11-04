@@ -7,6 +7,7 @@ fastapi>=0.162,<1
 uvicorn>=0.54,<1
 arq>=0.28,<0.29  # index worker queue, used when REDIS_URL is set
 redis>=5.3,<6
+httpx>=0.28,<1  # api.client, used by the CLI with --api and the web app with RAG_API_URL
 
 # Indexing and retrieval (ONNX models via fastembed, no PyTorch needed)
 langchain-core>=1.0,<2
