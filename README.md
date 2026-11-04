@@ -143,6 +143,17 @@ python -m rag_pipeline.main --path ../my-project --provider ollama -q "Where is 
 
 Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--mode {hybrid,dense,bm25}`, `--rerank`, `--rebuild`.
 
+**Web app and terminal on the API**
+
+Both clients can hand indexing and answering to a running API (below) instead of loading the models themselves:
+
+```bash
+python -m rag_pipeline.main --api http://127.0.0.1:8000 --path sample_codebase --provider ollama
+RAG_API_URL=http://127.0.0.1:8000 streamlit run streamlit/app.py
+```
+
+The CLI registers the folder, waits for its index job and asks through `/chat` in agent mode (`--oneshot` for a single retrieval); `--rebuild` and `--mode` only apply to the local index. With `RAG_API_URL` set, the web app indexes folders and GitHub repositories through the API, shows the job's progress, and adds an **Agent mode** switch; file uploads need the in-process mode. Without `--api` or `RAG_API_URL` both work as before, which is what Streamlit Community Cloud uses. The same question gets the same sources from either client. Python code can use the client directly: `api.client.RagClient("http://127.0.0.1:8000")` has `add_repo`, `index`, `wait_for_job`, `search`, `chat_events` (the pipeline's `Step`, `Sources` and `Token` events) and `ask`.
+
 **API**
 
 ```bash
@@ -195,6 +206,7 @@ The API queues each index job in Redis and reads its progress back from there, s
 | `REDIS_URL` | unset | Set it to send API index jobs to the worker (`python -m api.worker`); needs `RAG_VECTOR_STORE=qdrant` |
 | `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input (web app and API) to one directory tree. Set this on public deployments. |
 | `RAG_REPO_CACHE` | `.repos` | Where the API clones GitHub repositories |
+| `RAG_API_URL` | unset | Makes the web app index and answer through a running API instead of in its own process |
 | `RAG_WARM_UP` | `1` | `0` skips loading the embedding model and the Ollama model at startup |
 | `HF_MODEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OLLAMA_MODEL`, `OLLAMA_HOST` | see `.env.example` | Provider overrides |
 
