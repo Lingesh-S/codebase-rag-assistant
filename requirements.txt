@@ -8,6 +8,7 @@ uvicorn>=0.54,<1
 arq>=0.28,<0.29  # index worker queue, used when REDIS_URL is set
 redis>=5.3,<6
 httpx>=0.28,<1  # api.client, used by the CLI with --api and the web app with RAG_API_URL
+mcp>=2.3,<3  # MCP server for Claude Code, Cursor and other MCP clients
 
 # Indexing and retrieval (ONNX models via fastembed, no PyTorch needed)
 langchain-core>=1.0,<2
