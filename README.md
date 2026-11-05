@@ -23,6 +23,7 @@ Explore your own project files with natural language queries — understand, deb
 - **ChromaDB** — persistent vector store (cosine HNSW), the default with no server needed
 - **Qdrant** — optional shared vector store with hybrid dense + keyword search in one query
 - **arq + Redis** — optional index worker, so large repositories index outside the API process
+- **MCP** — a Model Context Protocol server, so Claude Code, Cursor and other MCP clients can search and read the index
 - **fastembed** — ONNX embedding and reranking models on CPU, no PyTorch needed
 - **rank-bm25** — keyword search with a code-aware tokenizer
 - **LangChain** — document model and language-aware text splitters
@@ -67,6 +68,7 @@ codebase-rag-assistant/
 ├── streamlit/app.py         # Streamlit chat UI
 ├── api/                     # FastAPI service: repos, index jobs, search, streamed chat
 │   └── worker.py            # arq index worker (used when REDIS_URL is set)
+├── mcp_server/              # MCP server: index_repo, index_status, search_code, read_file, list_dir, grep
 ├── rag_pipeline/
 │   ├── pipeline.py          # RAGPipeline: index, retrieve, answer
 │   ├── agent.py             # tool-calling agent: search_code, read_file, list_dir, grep
@@ -166,6 +168,7 @@ python -m api            # http://127.0.0.1:8000, interactive docs at /docs
 | `POST /repos/{id}/index` | Starts a background index job (or returns the one already running) |
 | `GET /jobs/{job_id}` | Job status, stage and progress (`done` of `total`) |
 | `POST /repos/{id}/search` | `{"query": "...", "k": 6}`: ranked passages with file and line numbers |
+| `POST /repos/{id}/tools/{name}` | Runs one agent tool (`search_code`, `read_file`, `list_dir`, `grep`) with its arguments as the JSON body; `?k=` sets the passages for `search_code` |
 | `POST /repos/{id}/chat` | `{"question": "...", "history": [...], "mode": "agent"}`: streams `step`, `sources` and `token` events, then `done` or `error` |
 
 By default `/chat` runs the agent: the model works through the codebase with four tools (`search_code`, `read_file`, `list_dir` and `grep`, all limited to the indexed files), so it can follow a call from one file into the next. Each tool call shows up as a step (`Searching: password hashing`, `Reading api/app.py lines 40-80`), the sources are the passages it actually opened and cited, and the answer's `[n]` citations point at them. It stops after 8 tool calls. Models that cannot call tools fall back to a single retrieval, and `"mode": "oneshot"` asks for that directly.
@@ -191,6 +194,35 @@ python -m api
 
 The API queues each index job in Redis and reads its progress back from there, so `GET /jobs/{job_id}` works as before. Both processes refuse to start in worker mode with `RAG_VECTOR_STORE=chroma`. On this laptop (RTX 4050) the worker indexed `chromadb`'s 2,987 chunks in 27 s while `/health` answered in 6.5 ms (median).
 
+**MCP server (Claude Code, Cursor)**
+
+`mcp_server` exposes the codebase tools over the Model Context Protocol: `index_repo` (a folder path or a public GitHub URL), `index_status`, `search_code`, `read_file`, `list_dir` and `grep`. Every tool takes an optional `repo` (its id, folder path or GitHub URL), needed once more than one repository is indexed. With `RAG_API_URL` set the tools go through that API, so the MCP server, the web app and the CLI share one set of indexes and give the same sources for the same question; without it the server indexes in its own process.
+
+```bash
+python -m mcp_server                                # stdio (what Claude Code and Cursor start)
+python -m mcp_server --transport http --port 8001   # streamable HTTP at http://127.0.0.1:8001/mcp
+```
+
+Claude Code starts the server from your project's folder, so point `PYTHONPATH` at this repository (adjust the paths; on macOS or Linux the interpreter is `venv/bin/python`):
+
+```bash
+claude mcp add codebase-rag --scope user -e PYTHONPATH=C:/path/to/codebase-rag-assistant -- C:/path/to/codebase-rag-assistant/venv/Scripts/python.exe -m mcp_server
+```
+
+Add `-e RAG_API_URL=http://127.0.0.1:8000` before `--` to use a running API. Then ask Claude Code to index the project with `index_repo` and search it. In Cursor, add the same command to `.cursor/mcp.json` (or `~/.cursor/mcp.json` for every project):
+
+```json
+{
+  "mcpServers": {
+    "codebase-rag": {
+      "command": "C:/path/to/codebase-rag-assistant/venv/Scripts/python.exe",
+      "args": ["-m", "mcp_server"],
+      "env": {"PYTHONPATH": "C:/path/to/codebase-rag-assistant"}
+    }
+  }
+}
+```
+
 ---
 
 ## ⚙️ Configuration
@@ -206,7 +238,7 @@ The API queues each index job in Redis and reads its progress back from there, s
 | `REDIS_URL` | unset | Set it to send API index jobs to the worker (`python -m api.worker`); needs `RAG_VECTOR_STORE=qdrant` |
 | `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input (web app and API) to one directory tree. Set this on public deployments. |
 | `RAG_REPO_CACHE` | `.repos` | Where the API clones GitHub repositories |
-| `RAG_API_URL` | unset | Makes the web app index and answer through a running API instead of in its own process |
+| `RAG_API_URL` | unset | Makes the web app and the MCP server index and answer through a running API instead of in their own process |
 | `RAG_WARM_UP` | `1` | `0` skips loading the embedding model and the Ollama model at startup |
 | `HF_MODEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OLLAMA_MODEL`, `OLLAMA_HOST` | see `.env.example` | Provider overrides |
 
