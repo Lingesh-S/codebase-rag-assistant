@@ -135,3 +135,12 @@ def test_unknown_chat_options_are_rejected(make_api_client):
 
     with pytest.raises(TypeError, match="temperature"):
         list(api.chat_events("any", "question", temperature=0.2))
+
+
+def test_tool_runs_an_agent_tool_through_the_api(make_api_client, codebase):
+    api = make_api_client()
+    repo_id = indexed(api, codebase)
+
+    assert "5| def hash_password" in api.tool(repo_id, "read_file", {"path": "app/auth.py"})
+    with pytest.raises(ApiError, match="outside the repository"):
+        api.tool(repo_id, "read_file", {"path": "../.env"})

@@ -368,6 +368,11 @@ class Agent:
             yield Token(text)
 
 
+def run_tool(rag: RAGPipeline, name: str, arguments: dict, k: int = SEARCH_K) -> tuple[str, str]:
+    """Runs a single tool call outside the agent loop (for the API and the MCP server); passages number from 1."""
+    return CodebaseTools(rag, k).execute(ToolCall(id="", name=name, arguments=arguments))
+
+
 def agent_events(
     rag: RAGPipeline,
     question: str,

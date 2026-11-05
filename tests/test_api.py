@@ -246,6 +246,42 @@ def test_search_returns_ranked_sources(client, codebase):
     assert sources[0]["source"] == "app/cart.py"
 
 
+def test_tools_endpoint_runs_the_agents_tools(client, codebase):
+    repo_id = indexed(client, codebase)
+
+    read = client.post(
+        f"/repos/{repo_id}/tools/read_file", json={"path": "app/auth.py", "start_line": 4, "end_line": 6}
+    )
+    listing = client.post(f"/repos/{repo_id}/tools/list_dir", json={"path": "app"})
+    search = client.post(f"/repos/{repo_id}/tools/search_code?k=1", json={"query": "shopping cart"})
+
+    assert read.status_code == 200
+    assert read.json()["label"] == "Reading app/auth.py lines 4-6"
+    assert "5| def hash_password" in read.json()["result"]
+    assert listing.json()["result"].splitlines() == ["app/auth.py", "app/cart.py"]
+    assert search.json()["result"].startswith("[1] app/cart.py lines")
+    assert "[2]" not in search.json()["result"]
+
+
+def test_tools_endpoint_rejects_bad_calls(client, codebase):
+    repo_id = indexed(client, codebase)
+
+    outside = client.post(f"/repos/{repo_id}/tools/read_file", json={"path": "../.env"})
+    secret = client.post(f"/repos/{repo_id}/tools/read_file", json={"path": ".env"})
+    unknown = client.post(f"/repos/{repo_id}/tools/delete_file", json={"path": "app/auth.py"})
+
+    assert outside.status_code == secret.status_code == unknown.status_code == 400
+    assert "outside the repository" in outside.json()["detail"]
+    assert "not a file in the index" in secret.json()["detail"]
+    assert "Unknown tool" in unknown.json()["detail"]
+
+
+def test_tools_need_an_index(client, codebase):
+    repo_id = register(client, codebase)
+
+    assert client.post(f"/repos/{repo_id}/tools/list_dir", json={}).status_code == 409
+
+
 def test_unknown_repos_and_jobs_are_404(client):
     assert client.get("/repos/nope").status_code == 404
     assert client.post("/repos/nope/index").status_code == 404

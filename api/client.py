@@ -103,6 +103,11 @@ class RagClient:
         sources = self._request("POST", f"/repos/{repo_id}/search", json={"query": query, "k": k})
         return [source_chunk(source) for source in sources]
 
+    def tool(self, repo_id: str, name: str, arguments: dict, k: int | None = None) -> str:
+        """Runs one of the agent's tools on the API and returns its text result."""
+        params = {} if k is None else {"k": k}
+        return self._request("POST", f"/repos/{repo_id}/tools/{name}", json=arguments, params=params)["result"]
+
     def chat_events(
         self, repo_id: str, question: str, history: list[dict] | None = None, **options
     ) -> Iterator[Step | Sources | Token]:

@@ -9,15 +9,16 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Body, FastAPI, HTTPException, Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 
 from api.jobs import JobRunner, QueueJobRunner, RedisJobStore
 from api.repos import Repo, RepoRegistry
 from api.schemas import ChatIn, RepoIn, SearchIn
 from embeddings.embedder import get_embedding_model
-from rag_pipeline.agent import agent_events
+from rag_pipeline.agent import SEARCH_K, ToolError, agent_events, run_tool
 from rag_pipeline.generator import LLM, available_providers, get_llm
 from rag_pipeline.pipeline import PROJECT_ROOT, RAGPipeline, RAGSettings, Sources, Step, Token
 from utils.chunker import chunk_body
@@ -79,6 +80,14 @@ def sse_answer(events: Iterator[Step | Sources | Token], llm: LLM | None) -> Ite
     done = {"answer": "".join(answer), "search_query": search_query}
     done |= {"provider": llm.provider, "model": llm.model} if llm else {"provider": "none", "model": None}
     yield sse_message("done", done)
+
+
+def tool_result(rag: RAGPipeline, name: str, arguments: dict, k: int) -> dict:
+    try:
+        label, result = run_tool(rag, name, arguments, k)
+    except ToolError as exc:  # a bad call is the caller's mistake, not a server failure
+        raise HTTPException(400, str(exc)) from exc
+    return {"label": label, "result": result}
 
 
 def job_runner(settings: RAGSettings, max_workers: int) -> JobRunner | QueueJobRunner:
@@ -169,6 +178,11 @@ def create_app(
     def search(repo_id: str, body: SearchIn) -> list[dict]:
         chunks = ready_index(repo_id).retrieve(body.query, body.k)
         return [source_dict(n, chunk) for n, chunk in enumerate(chunks, 1)]
+
+    @app.post("/repos/{repo_id}/tools/{name}")
+    def tool(repo_id: str, name: str, arguments: Annotated[dict | None, Body()] = None, k: int = SEARCH_K) -> dict:
+        """Runs one of the agent's tools (search_code, read_file, list_dir, grep) for MCP and other clients."""
+        return tool_result(ready_index(repo_id), name, arguments or {}, k)
 
     @app.post("/repos/{repo_id}/chat", responses={200: {"content": {"text/event-stream": {}}}})
     def chat(repo_id: str, body: ChatIn) -> EventSourceResponse:
