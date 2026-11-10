@@ -179,7 +179,9 @@ class QdrantStore:
         result = self.client.query_points(
             self.collection_name, prefetch=prefetch, query=models.FusionQuery(fusion=models.Fusion.RRF), limit=k
         )
-        return self._chunks(result.points)
+        # Chunks that swap ranks between the two lists tie exactly and Qdrant orders ties arbitrarily,
+        # so the same question could list its sources in a different order each time.
+        return sorted(self._chunks(result.points), key=lambda c: (-c.score, c.id))
 
     def all_chunks(self) -> list[StoredChunk]:
         return [

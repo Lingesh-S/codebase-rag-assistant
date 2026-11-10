@@ -163,6 +163,28 @@ def test_hybrid_search_filters_by_path_prefix_and_language(codebase, make_qdrant
     assert prefix_is_a_folder == []
 
 
+def test_hybrid_search_breaks_score_ties_the_same_way_every_time(codebase, make_qdrant_rag, monkeypatch):
+    # Two chunks that swap ranks between the dense and keyword lists get exactly the same RRF score,
+    # and Qdrant returns tied points in no fixed order.
+    rag = make_qdrant_rag(codebase)
+    rag.build_knowledge_base()
+    query_points = rag.store.client.query_points
+
+    def tied(*args, **kwargs):
+        result = query_points(*args, **kwargs)
+        for point in result.points:
+            point.score = 0.5
+        result.points.reverse()
+        return result
+
+    monkeypatch.setattr(rag.store.client, "query_points", tied)
+
+    ids = [c.id for c in rag.store.hybrid_search("password cart retry", k=10)]
+
+    assert len(ids) > 1
+    assert ids == sorted(ids)
+
+
 def test_retriever_uses_the_native_hybrid_query(codebase, make_qdrant_rag, monkeypatch):
     rag = make_qdrant_rag(codebase)
     rag.build_knowledge_base()
