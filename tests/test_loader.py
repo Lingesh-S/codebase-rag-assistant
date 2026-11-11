@@ -102,3 +102,13 @@ def test_files_over_the_size_limit_are_skipped(tmp_path):
     (tmp_path / "dump.json").write_text('{"rows": "' + "x" * 300_000 + '"}', encoding="utf-8")
 
     assert {d.metadata["source"] for d in load_codebase(tmp_path)} == {"small.py"}
+
+
+def test_a_folder_that_git_ignores_entirely_is_still_walked(tmp_path):
+    (tmp_path / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+    package = tmp_path / "vendor" / "package"
+    package.mkdir(parents=True)
+    (package / "core.py").write_text("x = 1\n", encoding="utf-8")
+    git("init", "-q", cwd=tmp_path)
+
+    assert {d.metadata["source"] for d in load_codebase(package)} == {"core.py"}

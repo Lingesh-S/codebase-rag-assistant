@@ -98,10 +98,20 @@ def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 60) -> dict[str, 
     return dict(scores)
 
 
+def matches(chunk: StoredChunk, path_prefix: str | None, language: str | None) -> bool:
+    source = chunk.metadata["source"]
+    prefix = (path_prefix or "").replace("\\", "/").strip("/")
+    in_path = not prefix or source == prefix or source.startswith(prefix + "/")
+    return in_path and (not language or chunk.metadata.get("language") == language)
+
+
 class HybridRetriever:
     """
     Dense vector search + BM25 keyword search, fused with Reciprocal Rank Fusion,
     then optionally re-ordered by a cross-encoder reranker.
+
+    Stores that offer hybrid_search (Qdrant) run the fusion themselves in one query;
+    for Chroma the BM25 index is kept in memory and fused here.
     """
 
     def __init__(
@@ -132,12 +142,25 @@ class HybridRetriever:
         order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
         return [replace(self._chunks[i], score=float(scores[i])) for i in order if scores[i] > 0]
 
-    def retrieve(self, query: str, k: int = 6, mode: str = "hybrid", rerank: bool = True) -> list[StoredChunk]:
+    def retrieve(
+        self,
+        query: str,
+        k: int = 6,
+        mode: str = "hybrid",
+        rerank: bool = True,
+        path_prefix: str | None = None,
+        language: str | None = None,
+    ) -> list[StoredChunk]:
+        """path_prefix (a folder or file) and language narrow the search to part of the codebase."""
         if mode not in RETRIEVAL_MODES:
             raise ValueError(f"mode must be one of {RETRIEVAL_MODES}")
 
-        if mode == "dense":
-            candidates = self.store.dense_search(query, self.candidate_k)
+        native = hasattr(self.store, "hybrid_search")
+        filters = {"path_prefix": path_prefix, "language": language} if native else {}
+        if mode == "hybrid" and native:
+            candidates = self.store.hybrid_search(query, self.candidate_k, self.candidate_k, **filters)
+        elif mode == "dense":
+            candidates = self.store.dense_search(query, self.candidate_k, **filters)
         elif mode == "bm25":
             candidates = self.bm25_search(query, self.candidate_k)
         else:
@@ -149,6 +172,9 @@ class HybridRetriever:
                 replace(by_id[chunk_id], score=score)
                 for chunk_id, score in sorted(fused.items(), key=lambda item: item[1], reverse=True)
             ]
+
+        if not native or mode == "bm25":
+            candidates = [c for c in candidates if matches(c, path_prefix, language)]
 
         if rerank and self.reranker is not None and candidates:
             head, tail = candidates[: self.rerank_top_n], candidates[self.rerank_top_n :]

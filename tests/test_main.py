@@ -70,3 +70,65 @@ def test_interactive_mode_keeps_history_until_exit(codebase, offline, monkeypatc
     # answer 1, follow-up rewrite, answer 2 (which receives the first exchange as history)
     assert len(llm.calls) == 3
     assert llm.calls[2]["messages"][0] == {"role": "user", "content": "How are passwords hashed?"}
+
+
+def test_api_mode_indexes_and_answers_through_the_api(codebase, make_api_client, monkeypatch, capsys):
+    make_api_client(llm=FakeLLM("It uses PBKDF2 [1]."))
+    monkeypatch.setattr(pipeline_module, "get_embedding_model", lambda name: pytest.fail("loaded a model locally"))
+
+    code = cli.main(
+        [
+            "--api",
+            "http://api.test",
+            "--path",
+            str(codebase),
+            "--provider",
+            "ollama",
+            "--oneshot",
+            "-q",
+            "How are passwords hashed?",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "API: http://api.test" in out
+    assert "Index ready: 5 files" in out
+    assert "It uses PBKDF2 [1]." in out
+    assert "Sources:\n  [1] app/auth.py" in out
+
+
+def test_api_mode_without_an_llm_prints_the_matching_code(codebase, make_api_client, capsys):
+    make_api_client()
+
+    assert cli.main(["--api", "http://api.test", "--path", str(codebase), "--provider", "none", "-q", "passwords"]) == 0
+
+    out = capsys.readouterr().out
+    assert "[1] app/auth.py" in out
+    assert "def hash_password" in out
+
+
+def test_api_mode_sends_the_history_of_an_interactive_session(codebase, make_api_client, monkeypatch, capsys):
+    llm = FakeLLM("Answer [1].")
+    make_api_client(llm=llm)
+    questions = iter(["How are passwords hashed?", "and the cart?", "exit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(questions))
+
+    assert cli.main(["--api", "http://api.test", "--path", str(codebase), "--provider", "ollama", "--oneshot"]) == 0
+
+    assert capsys.readouterr().out.count("Sources:") == 2
+    assert llm.calls[-1]["messages"][0] == {"role": "user", "content": "How are passwords hashed?"}
+
+
+def test_api_mode_reports_a_failed_index(tmp_path, make_api_client, capsys):
+    make_api_client()
+
+    assert cli.main(["--api", "http://api.test", "--path", str(tmp_path / "missing"), "-q", "anything"]) == 1
+    assert "Folder not found" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", [["--rebuild"], ["--mode", "dense"]])
+def test_api_mode_rejects_options_for_the_local_index(flag, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--api", "http://api.test", *flag])
+    assert "--api" in capsys.readouterr().err

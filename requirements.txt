@@ -2,12 +2,21 @@
 streamlit>=1.50,<2
 python-dotenv>=1.0,<2
 
+# API service
+fastapi>=0.162,<1
+uvicorn>=0.54,<1
+arq>=0.28,<0.29  # index worker queue, used when REDIS_URL is set
+redis>=5.3,<6
+httpx>=0.28,<1  # api.client, used by the CLI with --api and the web app with RAG_API_URL
+mcp>=2.3,<3  # MCP server for Claude Code, Cursor and other MCP clients
+
 # Indexing and retrieval (ONNX models via fastembed, no PyTorch needed)
 langchain-core>=1.0,<2
 langchain-text-splitters>=1.0,<2
 chromadb>=1.3,<2
 fastembed>=0.7,<1
 rank-bm25>=0.2.2,<0.3
+qdrant-client>=1.20,<2  # optional server store: RAG_VECTOR_STORE=qdrant
 
 # LLM providers (pick one at runtime)
 huggingface_hub>=1.0,<3

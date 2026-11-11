@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load .env before importing project modules: they read their defaults (models, paths) at import time.
 load_dotenv(PROJECT_ROOT / ".env")
 
+from api.client import connect  # noqa: E402
 from embeddings.embedder import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, get_embedding_model  # noqa: E402
 from loaders.code_loader import SUPPORTED_EXTENSIONS, extract_zip  # noqa: E402
 from loaders.github import clone_or_update, parse_github_url  # noqa: E402
@@ -35,6 +36,9 @@ CODE_LANGUAGES = {"js": "javascript", "ts": "typescript", "shell": "bash", "text
 SOURCE_KINDS = ["Folder path", "GitHub repository", "Upload files"]
 REPO_CACHE = Path(os.getenv("RAG_REPO_CACHE", str(PROJECT_ROOT / ".repos")))
 WARM_UP = os.getenv("RAG_WARM_UP", "1") != "0"
+# Set to use a running API (python -m api) for indexing and answers; unset, everything runs in this process,
+# which is what Streamlit Community Cloud needs.
+API_URL = os.getenv("RAG_API_URL")
 
 # --- Page Config ---
 st.set_page_config(page_title="Codebase RAG Assistant", layout="wide", page_icon="🤖")
@@ -145,6 +149,14 @@ def resolve_folder(path_text: str) -> Path:
     return path
 
 
+def api_folder(path_text: str) -> str:
+    """The folder to send to the API: resolved here when it exists here (the usual same-machine setup)."""
+    try:
+        return str(resolve_folder(path_text))
+    except ValueError:
+        return path_text.strip()  # it may exist on the API's machine; the API checks it
+
+
 def save_uploads(files, destination: Path) -> None:
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True)
@@ -195,6 +207,7 @@ class IndexJob:
     error: str | None = None
     finished: bool = False
     thread: threading.Thread | None = None
+    repo_id: str | None = None  # set when the API built the index
 
     def report(self, stage: str, done: int, total: int) -> None:
         self.stage, self.done, self.total = stage, done, total
@@ -213,9 +226,25 @@ def run_index_job(job: IndexJob, prepare, settings: RAGSettings, collection: str
         job.finished = True
 
 
-def start_index_job(label: str, prepare, settings: RAGSettings, collection: str | None) -> None:
+def run_api_index_job(job: IndexJob, api, repo: dict) -> None:
+    # Runs off the script thread, like run_index_job; the API does the work and this thread follows its progress.
+    try:
+        repo_id = api.add_repo(**repo)["id"]
+        record = api.wait_for_job(
+            api.index(repo_id)["id"], on_progress=lambda r: job.report(r["stage"] or "Queued", r["done"], r["total"])
+        )
+        if record["status"] != "done":
+            raise RuntimeError(record["error"] or "Indexing failed")
+        job.repo_id, job.stats = repo_id, IndexStats(**record["stats"])
+    except Exception as exc:
+        job.error = str(exc)
+    finally:
+        job.finished = True
+
+
+def start_index_job(label: str, run, *args) -> None:
     job = IndexJob(label)
-    job.thread = threading.Thread(target=run_index_job, args=(job, prepare, settings, collection), daemon=True)
+    job.thread = threading.Thread(target=run, args=(job, *args), daemon=True)
     st.session_state.index_job = job
     job.thread.start()
 
@@ -229,9 +258,13 @@ def collect_finished_job() -> None:
     if job.error:
         st.session_state.index_notice = ("error", job.error)
         return
-    st.session_state.rag = job.rag
-    device = getattr(job.rag.store.embedding, "device", "cpu").upper()
-    st.session_state.index_info = (job.label, job.stats, device)
+    if job.repo_id:
+        st.session_state.api_repo = job.repo_id
+        where = f"indexed by the API at {API_URL}"
+    else:
+        st.session_state.rag = job.rag
+        where = f"embeddings on {getattr(job.rag.store.embedding, 'device', 'cpu').upper()}"
+    st.session_state.index_info = (job.label, job.stats, where)
     if job.stats.total_chunks == 0:
         st.session_state.index_notice = ("warning", "No supported source files were found.")
     else:
@@ -253,6 +286,9 @@ def index_progress() -> None:
 # --- Session state ---
 st.session_state.setdefault("messages", [])
 st.session_state.setdefault("rag", None)
+st.session_state.setdefault("api_repo", None)  # the repo id when API_URL is set
+if API_URL and "api" not in st.session_state:
+    st.session_state.api = connect(API_URL)
 st.session_state.setdefault("index_info", None)
 st.session_state.setdefault("index_job", None)
 st.session_state.setdefault("index_notice", None)
@@ -265,7 +301,8 @@ if WARM_UP:
 # --- Sidebar ---
 with st.sidebar:
     st.header("Codebase")
-    source_kind = st.radio("Index from", SOURCE_KINDS)
+    # The API reads folders and clones repos on its own machine, so uploads stay an in-process feature.
+    source_kind = st.radio("Index from", SOURCE_KINDS[:2] if API_URL else SOURCE_KINDS)
     uploaded_files, folder_text, repo_url = [], None, None
     if source_kind == "Folder path":
         folder_text = st.text_input("Folder path", value="sample_codebase")
@@ -281,7 +318,16 @@ with st.sidebar:
     started = False
     if st.button("Build index", type="primary", width="stretch", disabled=st.session_state.index_job is not None):
         try:
-            if source_kind == "Upload files":
+            if API_URL:
+                if source_kind == "GitHub repository":
+                    label, repo = parse_github_url(repo_url or "").name, {"github_url": (repo_url or "").strip()}
+                else:
+                    folder = api_folder(folder_text or "")
+                    label, repo = Path(folder).name or folder, {"path": folder}
+                st.session_state.index_notice = None
+                start_index_job(label, run_api_index_job, st.session_state.api, repo)
+                started = True
+            elif source_kind == "Upload files":
                 if not uploaded_files:
                     raise ValueError("Upload at least one file first.")
                 folder = Path(tempfile.gettempdir()) / f"rag-upload-{st.session_state.session_id}"
@@ -307,9 +353,10 @@ with st.sidebar:
                 def prepare(job, folder=folder):
                     return folder
 
-            st.session_state.index_notice = None
-            start_index_job(label, prepare, settings, collection)
-            started = True
+            if not API_URL:
+                st.session_state.index_notice = None
+                start_index_job(label, run_index_job, prepare, settings, collection)
+                started = True
         except Exception as exc:
             st.session_state.index_notice = ("error", str(exc))
     if started:
@@ -321,11 +368,11 @@ with st.sidebar:
         kind, text = st.session_state.index_notice
         getattr(st, kind)(text)
     if st.session_state.index_info:
-        name, stats, device = st.session_state.index_info
+        name, stats, where = st.session_state.index_info
         st.caption(
             f"**{name}**: {stats.total_files} files, {stats.total_chunks} chunks · "
             f"{stats.files_added} new, {stats.files_updated} changed, {stats.files_removed} removed, "
-            f"{stats.files_unchanged} unchanged · embeddings on {device}"
+            f"{stats.files_unchanged} unchanged · {where}"
         )
 
     st.header("Model")
@@ -362,11 +409,16 @@ with st.sidebar:
             0.0,
             1.0,
             0.2,
-            disabled=provider in ("anthropic", "none"),
-            help="Current Claude models choose their own sampling settings.",
+            disabled=provider in ("anthropic", "none") or bool(API_URL),
+            help="Current Claude models choose their own sampling settings; the API uses its own.",
         )
         max_tokens = st.slider(
-            "Max answer tokens", 256, 8192, 2048, step=256, disabled=provider in ("anthropic", "none")
+            "Max answer tokens",
+            256,
+            8192,
+            2048,
+            step=256,
+            disabled=provider in ("anthropic", "none") or bool(API_URL),
         )
         top_k = st.slider("Chunks to retrieve", 3, 12, 6)
         use_reranker = st.toggle(
@@ -378,6 +430,11 @@ with st.sidebar:
             "Rewrite follow-up questions",
             value=True,
             help="Turns follow-ups such as 'and the title?' into standalone search queries.",
+        )
+        use_agent = bool(API_URL) and st.toggle(
+            "Agent mode",
+            value=True,
+            help="Lets the model search, read and grep files with tools before it answers.",
         )
 
     if st.button("Clear chat", width="stretch"):
@@ -406,10 +463,10 @@ if query:
     with st.chat_message("user"):
         st.markdown(query)
 
-    rag = st.session_state.rag
+    rag, api_repo = st.session_state.rag, st.session_state.api_repo
     in_history = False
     with st.chat_message("assistant"):
-        if rag is None:
+        if rag is None and api_repo is None:
             building = st.session_state.index_job is not None
             content = (
                 "The index is still being built; ask again when it finishes."
@@ -420,19 +477,33 @@ if query:
             st.markdown(content)
         else:
             try:
-                llm = None
-                if provider != "none" and model_name:
-                    llm = get_llm(provider, model_name, temperature=temperature, max_tokens=max_tokens)
                 status = st.status("Searching the codebase", expanded=False)
-                answer = rag.stream_answer(
-                    query,
-                    llm,
-                    history,
-                    rewrite_followups=rewrite_followups,
-                    k=top_k,
-                    rerank=use_reranker,
-                    on_step=lambda label: status.update(label=label),
-                )
+                if api_repo:
+                    answer = st.session_state.api.ask(
+                        api_repo,
+                        query,
+                        history,
+                        provider=provider,
+                        model=model_name,
+                        k=top_k,
+                        rerank=use_reranker,
+                        rewrite_followups=rewrite_followups,
+                        mode="agent" if use_agent else "oneshot",
+                        on_step=lambda label: status.update(label=label),
+                    )
+                else:
+                    llm = None
+                    if provider != "none" and model_name:
+                        llm = get_llm(provider, model_name, temperature=temperature, max_tokens=max_tokens)
+                    answer = rag.stream_answer(
+                        query,
+                        llm,
+                        history,
+                        rewrite_followups=rewrite_followups,
+                        k=top_k,
+                        rerank=use_reranker,
+                        on_step=lambda label: status.update(label=label),
+                    )
                 sources = source_dicts(answer.sources)
                 files = len({s["source"] for s in sources})
                 status.update(label=f"Found {len(sources)} passages in {files} files", state="complete")

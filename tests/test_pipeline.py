@@ -1,4 +1,5 @@
 from rag_pipeline.generator import SYSTEM_PROMPT
+from rag_pipeline.pipeline import Sources, Step, Token
 from tests.conftest import FakeLLM
 
 
@@ -107,3 +108,40 @@ def test_answers_report_their_steps(codebase, make_rag):
         "Writing the answer",
         "Searching the codebase",
     ]
+
+
+def test_answer_events_arrive_in_order_steps_sources_then_tokens(codebase, make_rag):
+    rag = make_rag(codebase)
+    rag.build_knowledge_base()
+
+    events = list(rag.answer_events("How are passwords hashed?", FakeLLM("It uses PBKDF2 [1].")))
+
+    assert events[0] == Step("Searching the codebase")
+    assert isinstance(events[1], Sources)
+    assert events[1].search_query == "How are passwords hashed?"
+    assert events[1].chunks[0].metadata["source"] == "app/auth.py"
+    assert events[2] == Step("Writing the answer")
+    assert all(isinstance(e, Token) for e in events[3:])
+    assert "".join(e.text for e in events[3:]) == "It uses PBKDF2 [1]."
+
+
+def test_answer_events_end_at_sources_without_an_llm(codebase, make_rag):
+    rag = make_rag(codebase)
+    rag.build_knowledge_base()
+
+    events = list(rag.answer_events("Where is the shopping cart?"))
+
+    assert [type(e) for e in events] == [Step, Sources]
+    assert events[1].chunks[0].metadata["source"] == "app/cart.py"
+
+
+def test_answer_events_report_the_rewrite_before_searching(codebase, make_rag):
+    rag = make_rag(codebase)
+    rag.build_knowledge_base()
+    history = [{"role": "user", "content": "Show the cart"}, {"role": "assistant", "content": "See app/cart.py"}]
+
+    events = rag.answer_events("and its total?", FakeLLM("What is the cart total?"), history)
+
+    assert next(events) == Step("Rewriting the follow-up question")
+    assert next(events) == Step("Searching the codebase")
+    assert next(events).search_query == "What is the cart total?"

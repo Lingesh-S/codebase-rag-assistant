@@ -117,7 +117,9 @@ def git_listed_files(root: Path) -> list[Path] | None:
         )
     except (subprocess.SubprocessError, OSError):
         return None
-    return sorted(root / name for name in result.stdout.decode("utf-8", "replace").split("\0") if name)
+    files = sorted(root / name for name in result.stdout.decode("utf-8", "replace").split("\0") if name)
+    # An empty list means the enclosing repo ignores this whole folder (say, a package under its venv): walk it.
+    return files or None
 
 
 def walk_files(root: Path):

@@ -19,7 +19,11 @@ Explore your own project files with natural language queries — understand, deb
 
 ## 🔧 Tech Stack
 - **Streamlit** — chat UI with streamed answers and expandable sources
-- **ChromaDB** — persistent vector store (cosine HNSW)
+- **FastAPI** — HTTP API with background index jobs and answers streamed as server-sent events
+- **ChromaDB** — persistent vector store (cosine HNSW), the default with no server needed
+- **Qdrant** — optional shared vector store with hybrid dense + keyword search in one query
+- **arq + Redis** — optional index worker, so large repositories index outside the API process
+- **MCP** — a Model Context Protocol server, so Claude Code, Cursor and other MCP clients can search and read the index
 - **fastembed** — ONNX embedding and reranking models on CPU, no PyTorch needed
 - **rank-bm25** — keyword search with a code-aware tokenizer
 - **LangChain** — document model and language-aware text splitters
@@ -51,6 +55,7 @@ Explore your own project files with natural language queries — understand, deb
 | Chunking | Python is parsed with `ast` so each function, class or method stays whole; large classes are split per method (`Class.method`). Other languages use LangChain's language-aware separators. Each chunk keeps its line range and gets a `File / Symbol` header that is embedded with it. |
 | Indexing | Chunk IDs are deterministic and each file's SHA-256 is stored, so rebuilding only re-embeds changed files and removes deleted ones. Changing the embedding model rebuilds the collection automatically. |
 | Retrieval | Dense search and BM25 (with camelCase / snake_case splitting and light stemming) are fused with Reciprocal Rank Fusion. An optional cross-encoder reorders the top 10. |
+| Agent | In the API's default mode the model calls tools to search, read, list and grep the indexed files (native tool calling on all three providers), then answers citing the passages it opened. |
 | Generation | Retrieved code is wrapped in numbered `<source>` tags, the model is told to treat it as data, cite `[n]`, and say when the context is insufficient. Follow-up questions are rewritten into standalone queries before retrieval. |
 
 ---
@@ -61,18 +66,24 @@ Explore your own project files with natural language queries — understand, deb
 ```bash
 codebase-rag-assistant/
 ├── streamlit/app.py         # Streamlit chat UI
+├── api/                     # FastAPI service: repos, index jobs, search, streamed chat
+│   └── worker.py            # arq index worker (used when REDIS_URL is set)
+├── mcp_server/              # MCP server: index_repo, index_status, search_code, read_file, list_dir, grep
 ├── rag_pipeline/
 │   ├── pipeline.py          # RAGPipeline: index, retrieve, answer
+│   ├── agent.py             # tool-calling agent: search_code, read_file, list_dir, grep
 │   ├── generator.py         # prompts + Hugging Face / Anthropic / Ollama clients
 │   └── main.py              # terminal CLI
 ├── loaders/code_loader.py   # file discovery, filtering, notebook + zip support
 ├── utils/chunker.py         # AST / language-aware chunking with line numbers
 ├── embeddings/embedder.py   # fastembed embedding model + cross-encoder reranker
 ├── vectorstore/vector_store.py  # Chroma collection with incremental sync
+├── vectorstore/qdrant_store.py  # Qdrant collection: dense + sparse vectors, hybrid query
 ├── retriever/code_retriever.py  # BM25 + dense hybrid retrieval, RRF, reranking
-├── evaluation/              # labelled questions + retrieval benchmark
+├── evaluation/              # labelled questions, retrieval benchmark, agent vs one-shot answer eval
 ├── tests/                   # pytest suite
 ├── sample_codebase/         # demo project used by the app, tests and evaluation
+├── docker-compose.dev.yml   # Qdrant and Redis for local development
 ├── requirements.txt
 └── requirements-dev.txt
 ```
@@ -121,8 +132,8 @@ The first index build downloads the embedding model (~70 MB) once; the optional 
 streamlit run streamlit/app.py
 ```
 
-1. Pick a folder path (defaults to `sample_codebase`) or upload files / a `.zip` of your project.
-2. Click **Build / Update Knowledge Base**. Click it again after editing code: only changed files are re-embedded.
+1. Pick a folder path (defaults to `sample_codebase`), a public GitHub repository URL, or upload files / a `.zip` of your project.
+2. Click **Build index**. Click it again after editing code: only changed files are re-embedded.
 3. Ask questions in the chat. Answers stream in with `[n]` citations; expand **Sources** to see the exact code.
 
 **Terminal**
@@ -134,6 +145,84 @@ python -m rag_pipeline.main --path ../my-project --provider ollama -q "Where is 
 
 Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--mode {hybrid,dense,bm25}`, `--rerank`, `--rebuild`.
 
+**Web app and terminal on the API**
+
+Both clients can hand indexing and answering to a running API (below) instead of loading the models themselves:
+
+```bash
+python -m rag_pipeline.main --api http://127.0.0.1:8000 --path sample_codebase --provider ollama
+RAG_API_URL=http://127.0.0.1:8000 streamlit run streamlit/app.py
+```
+
+The CLI registers the folder, waits for its index job and asks through `/chat` in agent mode (`--oneshot` for a single retrieval); `--rebuild` and `--mode` only apply to the local index. With `RAG_API_URL` set, the web app indexes folders and GitHub repositories through the API, shows the job's progress, and adds an **Agent mode** switch; file uploads need the in-process mode. Without `--api` or `RAG_API_URL` both work as before, which is what Streamlit Community Cloud uses. The same question gets the same sources from either client. Python code can use the client directly: `api.client.RagClient("http://127.0.0.1:8000")` has `add_repo`, `index`, `wait_for_job`, `search`, `chat_events` (the pipeline's `Step`, `Sources` and `Token` events) and `ask`.
+
+**API**
+
+```bash
+python -m api            # http://127.0.0.1:8000, interactive docs at /docs
+```
+
+| Endpoint | What it does |
+|---|---|
+| `POST /repos` | Registers `{"path": "..."}` or `{"github_url": "https://github.com/owner/repo"}` and returns its id |
+| `POST /repos/{id}/index` | Starts a background index job (or returns the one already running) |
+| `GET /jobs/{job_id}` | Job status, stage and progress (`done` of `total`) |
+| `POST /repos/{id}/search` | `{"query": "...", "k": 6}`: ranked passages with file and line numbers |
+| `POST /repos/{id}/tools/{name}` | Runs one agent tool (`search_code`, `read_file`, `list_dir`, `grep`) with its arguments as the JSON body; `?k=` sets the passages for `search_code` |
+| `POST /repos/{id}/chat` | `{"question": "...", "history": [...], "mode": "agent"}`: streams `step`, `sources` and `token` events, then `done` or `error` |
+
+By default `/chat` runs the agent: the model works through the codebase with four tools (`search_code`, `read_file`, `list_dir` and `grep`, all limited to the indexed files), so it can follow a call from one file into the next. Each tool call shows up as a step (`Searching: password hashing`, `Reading api/app.py lines 40-80`), the sources are the passages it actually opened and cited, and the answer's `[n]` citations point at them. It stops after 8 tool calls. Models that cannot call tools fall back to a single retrieval, and `"mode": "oneshot"` asks for that directly.
+
+The API, the CLI and the web app give the same folder or GitHub repository the same index, so an index built in one is reused by the others. Registered repositories live in memory, so register them again after a restart; their indexes stay on disk.
+
+**Index worker (Qdrant + Redis)**
+
+By default index jobs run on threads inside the API and the index is a local Chroma folder. For large repositories, run indexing in a separate worker process instead. Chroma cannot take writes from two processes, so this mode uses Qdrant:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d   # Qdrant on 127.0.0.1:6333, Redis on 127.0.0.1:6379
+```
+
+Then set these in `.env` (or the shell) and start both processes:
+
+```bash
+# RAG_VECTOR_STORE=qdrant
+# REDIS_URL=redis://127.0.0.1:6379
+python -m api.worker     # or: arq api.worker.WorkerSettings
+python -m api
+```
+
+The API queues each index job in Redis and reads its progress back from there, so `GET /jobs/{job_id}` works as before. Both processes refuse to start in worker mode with `RAG_VECTOR_STORE=chroma`. On this laptop (RTX 4050) the worker indexed `chromadb`'s 2,987 chunks in 27 s while `/health` answered in 6.5 ms (median).
+
+**MCP server (Claude Code, Cursor)**
+
+`mcp_server` exposes the codebase tools over the Model Context Protocol: `index_repo` (a folder path or a public GitHub URL), `index_status`, `search_code`, `read_file`, `list_dir` and `grep`. Every tool takes an optional `repo` (its id, folder path or GitHub URL), needed once more than one repository is indexed. With `RAG_API_URL` set the tools go through that API, so the MCP server, the web app and the CLI share one set of indexes and give the same sources for the same question; without it the server indexes in its own process.
+
+```bash
+python -m mcp_server                                # stdio (what Claude Code and Cursor start)
+python -m mcp_server --transport http --port 8001   # streamable HTTP at http://127.0.0.1:8001/mcp
+```
+
+Claude Code starts the server from your project's folder, so point `PYTHONPATH` at this repository (adjust the paths; on macOS or Linux the interpreter is `venv/bin/python`):
+
+```bash
+claude mcp add codebase-rag --scope user -e PYTHONPATH=C:/path/to/codebase-rag-assistant -- C:/path/to/codebase-rag-assistant/venv/Scripts/python.exe -m mcp_server
+```
+
+Add `-e RAG_API_URL=http://127.0.0.1:8000` before `--` to use a running API. Then ask Claude Code to index the project with `index_repo` and search it. In Cursor, add the same command to `.cursor/mcp.json` (or `~/.cursor/mcp.json` for every project):
+
+```json
+{
+  "mcpServers": {
+    "codebase-rag": {
+      "command": "C:/path/to/codebase-rag-assistant/venv/Scripts/python.exe",
+      "args": ["-m", "mcp_server"],
+      "env": {"PYTHONPATH": "C:/path/to/codebase-rag-assistant"}
+    }
+  }
+}
+```
+
 ---
 
 ## ⚙️ Configuration
@@ -143,8 +232,14 @@ Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--m
 | `RAG_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Any fastembed text model, e.g. `jinaai/jina-embeddings-v2-base-code` for large codebases |
 | `RAG_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Any fastembed cross-encoder |
 | `RAG_EMBEDDING_DEVICE` | `auto` | `auto` uses an NVIDIA GPU when `onnxruntime-gpu` is installed; `cpu` forces the CPU |
-| `RAG_PERSIST_DIR` | `chroma_db` | Where the vector index is stored |
-| `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input to one directory tree. Set this on public deployments. |
+| `RAG_PERSIST_DIR` | `chroma_db` | Where the Chroma index is stored |
+| `RAG_VECTOR_STORE` | `chroma` | `chroma` (local folder, no server) or `qdrant` (shared server, hybrid search inside Qdrant) |
+| `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant server used when `RAG_VECTOR_STORE=qdrant` |
+| `REDIS_URL` | unset | Set it to send API index jobs to the worker (`python -m api.worker`); needs `RAG_VECTOR_STORE=qdrant` |
+| `RAG_ALLOWED_ROOT` | unset | Restricts the folder-path input (web app and API) to one directory tree. Set this on public deployments. |
+| `RAG_REPO_CACHE` | `.repos` | Where the API clones GitHub repositories |
+| `RAG_API_URL` | unset | Makes the web app and the MCP server index and answer through a running API instead of in their own process |
+| `RAG_WARM_UP` | `1` | `0` skips loading the embedding model and the Ollama model at startup |
 | `HF_MODEL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OLLAMA_MODEL`, `OLLAMA_HOST` | see `.env.example` | Provider overrides |
 
 ---
@@ -155,6 +250,7 @@ Options: `--provider {huggingface,anthropic,ollama,none}`, `--model`, `-k`, `--m
 
 ```bash
 python -m evaluation.evaluate_retrieval
+python -m evaluation.evaluate_retrieval --store qdrant   # same benchmark on Qdrant (--qdrant-url :memory: needs no server)
 ```
 
 Results on the sample project (hit@k = an expected file is in the top k; MRR = mean reciprocal rank):
@@ -166,8 +262,23 @@ Results on the sample project (hit@k = an expected file is in the top k; MRR = m
 | Structure-aware chunks + headers, dense only | 0.90 | 1.00 | 0.950 |
 | **Structure-aware chunks + hybrid BM25/dense (default)** | **0.95** | **1.00** | **0.975** |
 | Default + cross-encoder reranking | 0.95 | 1.00 | 0.975 |
+| Qdrant hybrid (dense + sparse fused in one query) | 1.00 | 1.00 | 1.000 |
 
 Reranking adds no gain on this small, already well-ranked set and costs a few seconds per question on CPU, so it is opt-in (sidebar toggle or `--rerank`). With the weaker `all-MiniLM-L6-v2` embeddings it lifts hybrid MRR from 0.938 to 0.975, so it is worth enabling for large codebases or lighter embedding models. Extend `golden_set.json` with questions about your own code to tune these choices.
+
+**Answers: agent vs one-shot.** `evaluation/agent_questions.json` holds 10 cross-file questions about this repository and `sample_codebase`, each with the files a good answer must use. The script asks every question in both modes and scores the citations: file recall (how many of those files the answer cites) and citation validity (every `[n]` exists and points at a relevant file).
+
+```bash
+python evaluation/evaluate_answers.py                       # Ollama, OLLAMA_MODEL or the first pulled model
+python evaluation/evaluate_answers.py --provider anthropic --modes agent --out results.json
+```
+
+With `qwen3.5:4b` on Ollama (RTX 4050 laptop):
+
+| Mode | File recall | Valid citations | Seconds per question |
+|---|---|---|---|
+| One-shot retrieval | 0.62 | 0.63 | 17.4 |
+| **Agent (default)** | **0.90** | **0.82** | **13.3** |
 
 ---
 
@@ -176,7 +287,7 @@ Reranking adds no gain on this small, already well-ranked set and costs a few se
 ```bash
 pip install -r requirements-dev.txt
 pytest              # fast offline suite (fake embeddings, fake LLMs)
-pytest -m slow      # end-to-end app test with the real models
+pytest -m slow      # end-to-end tests with the real models, and the worker on Redis + Qdrant when they run
 ruff check .        # lint (rules in ruff.toml)
 ruff format .       # format to the project style (120-character lines)
 ```

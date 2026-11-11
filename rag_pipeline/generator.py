@@ -1,10 +1,12 @@
 # rag_pipeline/generator.py
 
+import json
 import os
 import re
 from collections.abc import Iterator
 from contextlib import suppress
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from utils.chunker import chunk_body
 from vectorstore.vector_store import StoredChunk
@@ -80,6 +82,96 @@ class LLM(Protocol):
     ) -> Iterator[str]: ...
 
 
+# ---- Tool calling ----------------------------------------------------------------------
+#
+# The agent keeps its conversation in one provider-neutral shape and each provider converts it:
+#   {"role": "user" | "assistant", "content": str}                               plain turns
+#   {"role": "assistant", "content": str, "tool_calls": [ToolCall], "raw": ...}  a turn that called tools
+#   {"role": "tool", "tool_call_id": str, "name": str, "content": str, "is_error": bool}
+# Tools are {"name", "description", "parameters"}, the parameters as a JSON schema.
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict | str  # str when the model sent arguments that are not a JSON object
+
+
+@dataclass
+class ToolTurn:
+    text: str
+    calls: list[ToolCall]
+    raw: Any = None  # the provider's own reply, sent back as is (Claude needs its thinking blocks returned)
+
+
+def parse_arguments(arguments) -> dict | str:
+    if isinstance(arguments, dict):
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+    except (TypeError, ValueError):
+        return str(arguments)
+    return parsed if isinstance(parsed, dict) else str(arguments)
+
+
+def anthropic_messages(messages: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for m in messages:
+        if m["role"] == "tool":
+            block = {"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": m["content"]}
+            if m.get("is_error"):
+                block["is_error"] = True
+            # All results of one turn travel together in a single user message.
+            if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list):
+                out[-1]["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+        elif "tool_calls" in m:
+            content = m.get("raw") or [
+                *([{"type": "text", "text": m["content"]}] if m["content"] else []),
+                *({"type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments} for c in m["tool_calls"]),
+            ]
+            out.append({"role": "assistant", "content": content})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
+def openai_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for m in messages:
+        if m["role"] == "tool":
+            out.append({"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
+        elif "tool_calls" in m:
+            calls = [
+                {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.arguments)}}
+                for c in m["tool_calls"]
+            ]
+            out.append({"role": "assistant", "content": m["content"] or "", "tool_calls": calls})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
+def ollama_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for m in messages:
+        if m["role"] == "tool":
+            out.append({"role": "tool", "tool_name": m["name"], "content": m["content"]})
+        elif "tool_calls" in m:
+            calls = [{"function": {"name": c.name, "arguments": c.arguments}} for c in m["tool_calls"]]
+            out.append({"role": "assistant", "content": m["content"] or "", "tool_calls": calls})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
+def function_tools(tools: list[dict]) -> list[dict]:
+    """The OpenAI function format, which Hugging Face and Ollama both accept."""
+    return [{"type": "function", "function": tool} for tool in tools]
+
+
 # ---- Providers ---------------------------------------------------------------------
 
 
@@ -114,6 +206,21 @@ class HuggingFaceLLM:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
+    def call_tools(self, system, messages, tools, max_tokens=None) -> ToolTurn:
+        response = self.client.chat_completion(
+            messages=[{"role": "system", "content": system}, *openai_messages(messages)],
+            model=self.model,
+            max_tokens=max(max_tokens or self.max_tokens, HOSTED_REASONING_TOKENS),
+            temperature=self.temperature,
+            tools=function_tools(tools) or None,
+        )
+        message = response.choices[0].message
+        calls = [
+            ToolCall(call.id, call.function.name, parse_arguments(call.function.arguments))
+            for call in message.tool_calls or []
+        ]
+        return ToolTurn(message.content or "", calls)
+
 
 class AnthropicLLM:
     """Claude through the official Anthropic SDK, with server-side refusal fallback enabled."""
@@ -147,6 +254,27 @@ class AnthropicLLM:
             yield "\n\n_The model declined to answer this request._"
         elif final.stop_reason == "max_tokens":
             yield "\n\n_(Answer cut off at the token limit.)_"
+
+    def call_tools(self, system, messages, tools, max_tokens=None) -> ToolTurn:
+        tool_params = [
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools
+        ]
+        with self.client.beta.messages.stream(
+            model=self.model,
+            max_tokens=max(max_tokens or 0, self.max_tokens),
+            system=system,
+            messages=anthropic_messages(messages),
+            output_config={"effort": self.effort},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            **({"tools": tool_params} if tool_params else {}),
+        ) as stream:
+            final = stream.get_final_message()
+        if final.stop_reason == "refusal":
+            return ToolTurn("_The model declined to answer this request._", [])
+        text = "".join(block.text for block in final.content if block.type == "text")
+        calls = [ToolCall(b.id, b.name, parse_arguments(b.input)) for b in final.content if b.type == "tool_use"]
+        return ToolTurn(text, calls, raw=final.content)
 
 
 class OllamaLLM:
@@ -218,6 +346,26 @@ class OllamaLLM:
                 if attempt == 2:
                     raise RuntimeError(self._load_failure_message()) from exc
 
+    def call_tools(self, system, messages, tools, max_tokens=None) -> ToolTurn:
+        response = self.client.chat(
+            model=self.model,
+            messages=[{"role": "system", "content": system}, *ollama_messages(messages)],
+            tools=function_tools(tools) or None,
+            options={
+                "temperature": self.temperature,
+                "num_predict": max_tokens or self.max_tokens,
+                "num_ctx": self.num_ctx,
+            },
+            keep_alive=self.keep_alive,
+        )
+        message = response.message
+        # Ollama gives calls no ids; numbering them keeps the conversation the same shape for every provider.
+        calls = [
+            ToolCall(f"call_{n}", call.function.name, parse_arguments(call.function.arguments))
+            for n, call in enumerate(message.tool_calls or [], 1)
+        ]
+        return ToolTurn(message.content or "", calls)
+
     def _load_failure_message(self) -> str:
         size = ""
         with suppress(Exception):  # the size is a nice-to-have; never let it hide the real error
@@ -239,7 +387,8 @@ def huggingface_token() -> str | None:
 
 
 def ollama_host() -> str:
-    return os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    # Not "localhost": on Windows it tries IPv6 first and each call waits ~2 s before falling back to IPv4.
+    return os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 
 
 def ollama_models() -> list[str]:

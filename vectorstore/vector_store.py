@@ -42,6 +42,38 @@ def batched(items: list, size: int | None = None):
         yield items[i : i + size]
 
 
+def plan_sync(
+    indexed: list[tuple[str, str, str]], chunks: list[Document]
+) -> tuple[IndexStats, list[str], list[Document]]:
+    """
+    Compares what a store holds, as (chunk id, source, file hash) rows, with a fresh set of chunks.
+
+    Returns the stats, the ids to delete and the chunks to embed: files whose content hash is
+    unchanged are skipped, changed files are replaced and deleted files are removed.
+    """
+    indexed_hash: dict[str, str] = {}
+    ids_by_source: dict[str, list[str]] = defaultdict(list)
+    for chunk_id, source, file_hash in indexed:
+        indexed_hash[source] = file_hash
+        ids_by_source[source].append(chunk_id)
+
+    current_hash = {c.metadata["source"]: c.metadata["file_hash"] for c in chunks}
+    stats = IndexStats(total_files=len(current_hash))
+    stale_ids: list[str] = []
+    for source, file_hash in indexed_hash.items():
+        if source not in current_hash:
+            stats.files_removed += 1
+            stale_ids += ids_by_source[source]
+        elif current_hash[source] != file_hash:
+            stats.files_updated += 1
+            stale_ids += ids_by_source[source]
+        else:
+            stats.files_unchanged += 1
+    stats.files_added = len(current_hash.keys() - indexed_hash.keys())
+    new_chunks = [c for c in chunks if indexed_hash.get(c.metadata["source"]) != c.metadata["file_hash"]]
+    return stats, stale_ids, new_chunks
+
+
 class CodeVectorStore:
     """
     Chroma collection holding the chunks of one codebase.
@@ -72,30 +104,15 @@ class CodeVectorStore:
 
     def sync(self, chunks: list[Document], progress: Callable[[int, int], None] | None = None) -> IndexStats:
         existing = self.collection.get(include=["metadatas"])
-        indexed_hash: dict[str, str] = {}
-        ids_by_source: dict[str, list[str]] = defaultdict(list)
-        for chunk_id, meta in zip(existing["ids"], existing["metadatas"], strict=True):
-            indexed_hash[meta["source"]] = meta.get("file_hash", "")
-            ids_by_source[meta["source"]].append(chunk_id)
-
-        current_hash = {c.metadata["source"]: c.metadata["file_hash"] for c in chunks}
-        stats = IndexStats(total_files=len(current_hash))
-        stale_ids: list[str] = []
-        for source, file_hash in indexed_hash.items():
-            if source not in current_hash:
-                stats.files_removed += 1
-                stale_ids += ids_by_source[source]
-            elif current_hash[source] != file_hash:
-                stats.files_updated += 1
-                stale_ids += ids_by_source[source]
-            else:
-                stats.files_unchanged += 1
-        stats.files_added = len(current_hash.keys() - indexed_hash.keys())
+        indexed = [
+            (i, m["source"], m.get("file_hash", ""))
+            for i, m in zip(existing["ids"], existing["metadatas"], strict=True)
+        ]
+        stats, stale_ids, new_chunks = plan_sync(indexed, chunks)
 
         for batch in batched(stale_ids):
             self.collection.delete(ids=batch)
 
-        new_chunks = [c for c in chunks if indexed_hash.get(c.metadata["source"]) != c.metadata["file_hash"]]
         done = 0
         for batch in batched(new_chunks):
             texts = [c.page_content for c in batch]

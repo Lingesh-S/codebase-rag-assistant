@@ -48,6 +48,22 @@ class FakeLLM:
             yield self.reply[i : i + 4]
 
 
+class ScriptedLLM(FakeLLM):
+    """A tool-calling model that plays back fixed turns and records every request it gets."""
+
+    def __init__(self, turns, reply: str = "It hashes passwords with PBKDF2 [1]."):
+        super().__init__(reply)
+        self.turns = list(turns)
+        self.tool_requests: list[dict] = []
+
+    def call_tools(self, system, messages, tools, max_tokens=None):
+        self.tool_requests.append({"system": system, "messages": list(messages), "tools": [t["name"] for t in tools]})
+        turn = self.turns.pop(0) if len(self.turns) > 1 else self.turns[0]  # the last turn repeats
+        if isinstance(turn, Exception):
+            raise turn
+        return turn
+
+
 def write(root: Path, relative: str, content: str | bytes) -> Path:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +135,17 @@ def fake_embeddings() -> FakeEmbeddings:
 
 
 @pytest.fixture
+def qdrant_memory():
+    """The process-wide in-memory Qdrant that ":memory:" stores share, emptied after each test."""
+    from vectorstore.qdrant_store import qdrant_client
+
+    client = qdrant_client(":memory:")
+    yield client
+    for collection in client.get_collections().collections:
+        client.delete_collection(collection.name)
+
+
+@pytest.fixture
 def make_rag(tmp_path, fake_embeddings):
     def factory(root: Path, reranker=None, **settings) -> RAGPipeline:
         settings.setdefault("persist_dir", str(tmp_path / "chroma"))
@@ -128,3 +155,35 @@ def make_rag(tmp_path, fake_embeddings):
         )
 
     return factory
+
+
+@pytest.fixture
+def make_api_client(tmp_path, fake_embeddings, monkeypatch):
+    """
+    A RagClient talking to an in-process API with fake models; api.client.connect returns the same client,
+    so the CLI's --api mode and the web app's RAG_API_URL mode reach this API too.
+    """
+    from fastapi.testclient import TestClient
+
+    from api import client as client_module
+    from api.app import create_app
+
+    opened = []
+
+    def factory(llm=None):
+        app = create_app(
+            RAGSettings(persist_dir=str(tmp_path / "api-chroma"), rerank_model=None),
+            embedding=fake_embeddings,
+            llm_factory=lambda provider, model: None if provider in (None, "none") else (llm or FakeLLM()),
+            repo_cache=tmp_path / "repos",
+            warm_up=False,
+        )
+        http = TestClient(app).__enter__()
+        opened.append(http)
+        api = client_module.RagClient(http=http, poll_seconds=0.02)
+        monkeypatch.setattr(client_module, "connect", lambda base_url: api)
+        return api
+
+    yield factory
+    for http in opened:
+        http.__exit__(None, None, None)

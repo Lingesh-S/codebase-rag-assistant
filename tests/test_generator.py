@@ -8,10 +8,15 @@ from rag_pipeline.generator import (
     AnthropicLLM,
     HuggingFaceLLM,
     OllamaLLM,
+    ToolCall,
+    anthropic_messages,
     build_messages,
     condense_question,
     format_context,
     get_llm,
+    ollama_messages,
+    openai_messages,
+    parse_arguments,
 )
 from tests.conftest import FakeLLM
 from vectorstore.vector_store import StoredChunk
@@ -361,3 +366,162 @@ def test_ollama_answers_keep_the_model_loaded():
     "".join(llm.stream("system", [{"role": "user", "content": "q"}]))
 
     assert llm.client.requests[0]["keep_alive"] == llm.keep_alive
+
+
+def test_ollama_defaults_to_the_ipv4_loopback(monkeypatch):
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    # "localhost" tries IPv6 first on Windows, and every call waited ~2.4 s for it while Ollama listens on 127.0.0.1.
+    assert generator.ollama_host() == "http://127.0.0.1:11434"
+
+
+# ---- Tool calling ----------------------------------------------------------------------
+
+SEARCH_TOOL = {
+    "name": "search_code",
+    "description": "Search the code",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+# A finished tool exchange in the provider-neutral shape the agent keeps.
+TOOL_EXCHANGE = [
+    {"role": "user", "content": "How are passwords hashed?"},
+    {
+        "role": "assistant",
+        "content": "Let me look.",
+        "tool_calls": [
+            ToolCall("call_1", "search_code", {"query": "hash password"}),
+            ToolCall("call_2", "read_file", {"path": "a.py"}),
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "name": "search_code", "content": "[1] a.py", "is_error": False},
+    {"role": "tool", "tool_call_id": "call_2", "name": "read_file", "content": "Error: no such file", "is_error": True},
+]
+
+
+def test_tool_exchange_converts_to_anthropic_blocks():
+    messages = anthropic_messages(TOOL_EXCHANGE)
+
+    assert messages[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me look."},
+            {"type": "tool_use", "id": "call_1", "name": "search_code", "input": {"query": "hash password"}},
+            {"type": "tool_use", "id": "call_2", "name": "read_file", "input": {"path": "a.py"}},
+        ],
+    }
+    # Every result of one turn goes back in a single user message.
+    assert messages[2] == {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "call_1", "content": "[1] a.py"},
+            {"type": "tool_result", "tool_use_id": "call_2", "content": "Error: no such file", "is_error": True},
+        ],
+    }
+    assert len(messages) == 3
+
+
+def test_anthropic_assistant_turns_are_sent_back_unchanged():
+    raw = [SimpleNamespace(type="thinking", thinking="", signature="sig")]
+    exchange = [TOOL_EXCHANGE[0], {**TOOL_EXCHANGE[1], "raw": raw}]
+
+    assert anthropic_messages(exchange)[1] == {"role": "assistant", "content": raw}
+
+
+def test_tool_exchange_converts_to_openai_and_ollama_messages():
+    openai = openai_messages(TOOL_EXCHANGE)
+    assert openai[1]["tool_calls"][0] == {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "search_code", "arguments": '{"query": "hash password"}'},
+    }
+    assert openai[2] == {"role": "tool", "tool_call_id": "call_1", "content": "[1] a.py"}
+
+    ollama = ollama_messages(TOOL_EXCHANGE)
+    assert ollama[1]["tool_calls"][1] == {"function": {"name": "read_file", "arguments": {"path": "a.py"}}}
+    assert ollama[3] == {"role": "tool", "tool_name": "read_file", "content": "Error: no such file"}
+
+
+def test_anthropic_tool_turn_returns_calls_and_raw_content():
+    content = [
+        SimpleNamespace(type="thinking", thinking=""),
+        SimpleNamespace(type="text", text="Searching."),
+        SimpleNamespace(type="tool_use", id="toolu_1", name="search_code", input={"query": "auth"}),
+    ]
+    requests = []
+
+    class Stream(FakeAnthropicStream):
+        def get_final_message(self):
+            return SimpleNamespace(stop_reason="tool_use", content=content)
+
+    def stream(**kwargs):
+        requests.append(kwargs)
+        return Stream("tool_use")
+
+    llm = AnthropicLLM(api_key="test-key")
+    llm.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=stream)))
+
+    turn = llm.call_tools("system", [{"role": "user", "content": "q"}], [SEARCH_TOOL])
+
+    assert turn.text == "Searching."
+    assert turn.calls == [ToolCall("toolu_1", "search_code", {"query": "auth"})]
+    assert turn.raw is content
+    assert requests[0]["tools"] == [
+        {"name": "search_code", "description": "Search the code", "input_schema": SEARCH_TOOL["parameters"]}
+    ]
+    assert requests[0]["fallbacks"] == "default"
+    assert "tool_choice" not in requests[0]  # forced tool use is rejected by current Claude models
+
+    llm.call_tools("system", [{"role": "user", "content": "q"}], [])
+    assert "tools" not in requests[1]
+
+
+def test_huggingface_tool_turn_parses_json_arguments():
+    requests = []
+
+    def chat_completion(**kwargs):
+        requests.append(kwargs)
+        call = SimpleNamespace(id="c1", function=SimpleNamespace(name="search_code", arguments='{"query": "auth"}'))
+        message = SimpleNamespace(content=None, tool_calls=[call])
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    llm = HuggingFaceLLM(token="hf_test")
+    llm.client = SimpleNamespace(chat_completion=chat_completion)
+
+    turn = llm.call_tools("system", [{"role": "user", "content": "q"}], [SEARCH_TOOL])
+
+    assert turn.text == ""
+    assert turn.calls == [ToolCall("c1", "search_code", {"query": "auth"})]
+    assert requests[0]["messages"][0] == {"role": "system", "content": "system"}
+    assert requests[0]["tools"][0]["function"]["name"] == "search_code"
+    assert "stream" not in requests[0]
+
+
+def test_tool_arguments_that_are_not_json_objects_are_kept_as_text():
+    assert parse_arguments('{"query": "x"}') == {"query": "x"}
+    assert parse_arguments({"query": "x"}) == {"query": "x"}
+    assert parse_arguments("not json") == "not json"
+    assert parse_arguments("[1, 2]") == "[1, 2]"
+
+
+def test_ollama_tool_turn_numbers_its_calls():
+    requests = []
+
+    class Client:
+        def chat(self, **kwargs):
+            requests.append(kwargs)
+            calls = [
+                SimpleNamespace(function=SimpleNamespace(name="list_dir", arguments={"path": ""})),
+                SimpleNamespace(function=SimpleNamespace(name="grep", arguments={"pattern": "def"})),
+            ]
+            return SimpleNamespace(message=SimpleNamespace(content="", tool_calls=calls))
+
+    llm = OllamaLLM(model="qwen3.5:4b", host="http://127.0.0.1:9")
+    llm.client = Client()
+
+    turn = llm.call_tools("system", [{"role": "user", "content": "q"}], [SEARCH_TOOL])
+
+    assert [(c.id, c.name) for c in turn.calls] == [("call_1", "list_dir"), ("call_2", "grep")]
+    assert requests[0]["tools"][0] == {"type": "function", "function": SEARCH_TOOL}
+    assert requests[0]["keep_alive"] == llm.keep_alive
+    assert requests[0]["options"]["num_ctx"] == llm.num_ctx
