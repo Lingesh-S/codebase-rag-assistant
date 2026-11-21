@@ -2,9 +2,12 @@
 
 import ast
 import hashlib
+from pathlib import PurePosixPath
 
 from langchain_core.documents import Document
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
+from utils.symbols import Symbol, extract_symbols
 
 DEFAULT_CHUNK_SIZE = 1200
 DEFAULT_CHUNK_OVERLAP = 120
@@ -20,8 +23,10 @@ class CodeChunker:
     """
     Splits source files into retrieval-sized chunks that follow code structure.
 
-    Python is split along the AST so functions, classes and methods stay intact.
-    Other languages use LangChain's language-aware separators. Every chunk keeps
+    Python is split along the AST and 11 other languages along their tree-sitter
+    parse (see utils/symbols.py) so functions, classes and methods stay intact.
+    Anything else, or code that does not parse, uses LangChain's language-aware
+    separators. Every chunk keeps
     its line range and symbol name, and gets a short "File / Symbol" header so the
     embedding and the LLM both see where the code lives.
     """
@@ -35,12 +40,16 @@ class CodeChunker:
         text = doc.page_content
         lines = text.splitlines()
         language = doc.metadata.get("language", "text")
+        suffix = PurePosixPath(doc.metadata.get("source", "")).suffix
+        symbols = None if language == "python" else extract_symbols(text, language, suffix)
 
         spans = None
         if len(text) <= self.chunk_size:
-            spans = self._fit(lines, 1, len(lines), self._top_level_symbols(text, language))
+            spans = self._fit(lines, 1, len(lines), self._top_level_symbols(text, language, symbols), language)
         elif language == "python":
             spans = self._python_spans(text, lines)
+        elif symbols is not None:
+            spans = self._symbol_spans(lines, symbols, 1, len(lines), "", language)
         if spans is None:
             spans = self._splitter_spans(text, lines, language, symbol="")
 
@@ -121,7 +130,9 @@ class CodeChunker:
         return merged
 
     @staticmethod
-    def _top_level_symbols(text: str, language: str) -> str:
+    def _top_level_symbols(text: str, language: str, symbols: list[Symbol] | None = None) -> str:
+        if symbols is not None:
+            return ", ".join(dict.fromkeys(s.name for s in symbols if s.name))
         if language != "python":
             return ""
         try:
@@ -130,9 +141,36 @@ class CodeChunker:
             return ""
         return ", ".join(n.name for n in tree.body if isinstance(n, DEFINITIONS))
 
+    # ---- Other languages (tree-sitter) ---------------------------------------
+
+    def _symbol_spans(
+        self, lines: list[str], symbols: list[Symbol], lo: int, hi: int, parent: str, language: str
+    ) -> list[Span]:
+        """Chunks for lines lo..hi: each symbol on its own, the code between symbols as blocks of the parent."""
+        spans: list[Span] = []
+        cursor = lo
+        for symbol in symbols:
+            if symbol.start > cursor:
+                spans += self._fit(lines, cursor, symbol.start - 1, parent, language)
+            spans += self._symbol_definition_spans(lines, symbol, parent, language)
+            cursor = max(cursor, symbol.end + 1)
+        if cursor <= hi:
+            spans += self._fit(lines, cursor, hi, parent, language)
+        return self._merge_small(lines, spans)
+
+    def _symbol_definition_spans(self, lines: list[str], symbol: Symbol, parent: str, language: str) -> list[Span]:
+        name = f"{parent}.{symbol.name}" if parent and symbol.name else symbol.name or parent
+        if self._size(lines, symbol.start, symbol.end) <= self.chunk_size or not symbol.children:
+            return self._fit(lines, symbol.start, symbol.end, name, language)
+
+        # Large class: its header and fields form one chunk, then every member is chunked on its own.
+        first = symbol.children[0].start
+        spans = self._fit(lines, symbol.start, first - 1, name, language)
+        return spans + self._symbol_spans(lines, symbol.children, first, symbol.end, name, language)
+
     # ---- Generic splitting ----------------------------------------------------
 
-    def _fit(self, lines: list[str], start: int, end: int, symbol: str) -> list[Span]:
+    def _fit(self, lines: list[str], start: int, end: int, symbol: str, language: str = "python") -> list[Span]:
         """Trims blank edge lines and splits the range further if it is still too large."""
         while start <= end and not lines[start - 1].strip():
             start += 1
@@ -145,7 +183,7 @@ class CodeChunker:
         text = "\n".join(lines[start - 1 : end])
         return [
             (start + s - 1, start + e - 1, symbol)
-            for s, e, _ in self._splitter_spans(text, text.splitlines(), "python", symbol)
+            for s, e, _ in self._splitter_spans(text, text.splitlines(), language, symbol)
         ]
 
     def _splitter_spans(self, text: str, lines: list[str], language: str, symbol: str) -> list[Span]:

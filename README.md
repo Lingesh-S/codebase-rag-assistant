@@ -52,7 +52,7 @@ Explore your own project files with natural language queries — understand, deb
 | Stage | What it does |
 |---|---|
 | Loading | Walks the folder, skips `.git`, virtualenvs, `node_modules`, build output, lock files, binaries and secret files (`.env*`, `secrets.*`, `credentials.*`). |
-| Chunking | Python is parsed with `ast` so each function, class or method stays whole; large classes are split per method (`Class.method`). Other languages use LangChain's language-aware separators. Each chunk keeps its line range and gets a `File / Symbol` header that is embedded with it. |
+| Chunking | Python is parsed with `ast` so each function, class or method stays whole; large classes are split per method (`Class.method`). JavaScript, TypeScript and TSX, Java, Go, Rust, C, C++, C#, Ruby, PHP and Kotlin are parsed with tree-sitter (`utils/symbols.py`), so functions, classes and methods get the same treatment (`Class.method`, `Type.Method` for Go receivers). Anything else, or a file that does not parse, uses LangChain's language-aware separators. Each chunk keeps its line range and gets a `File / Symbol` header that is embedded with it. |
 | Indexing | Chunk IDs are deterministic and each file's SHA-256 is stored, so rebuilding only re-embeds changed files and removes deleted ones. Changing the embedding model rebuilds the collection automatically. |
 | Retrieval | Dense search and BM25 (with camelCase / snake_case splitting and light stemming) are fused with Reciprocal Rank Fusion. An optional cross-encoder reorders the top 10. |
 | Agent | In the API's default mode the model calls tools to search, read, list and grep the indexed files (native tool calling on all three providers), then answers citing the passages it opened. |
@@ -75,7 +75,8 @@ codebase-rag-assistant/
 │   ├── generator.py         # prompts + Hugging Face / Anthropic / Ollama clients
 │   └── main.py              # terminal CLI
 ├── loaders/code_loader.py   # file discovery, filtering, notebook + zip support
-├── utils/chunker.py         # AST / language-aware chunking with line numbers
+├── utils/chunker.py         # AST / tree-sitter / language-aware chunking with line numbers
+├── utils/symbols.py         # definitions per file (names, kinds, line ranges) via tree-sitter
 ├── embeddings/embedder.py   # fastembed embedding model + cross-encoder reranker
 ├── vectorstore/vector_store.py  # Chroma collection with incremental sync
 ├── vectorstore/qdrant_store.py  # Qdrant collection: dense + sparse vectors, hybrid query
